@@ -83,7 +83,7 @@ const addJobToSheet = async (req, res) => {
       new Date().toLocaleString(),
     ];
 
-    await sheets.spreadsheets.values.append({
+    sheets.spreadsheets.values.append({
       spreadsheetId: sheetId,
       range: "Sheet1!A1",
       valueInputOption: "USER_ENTERED",
