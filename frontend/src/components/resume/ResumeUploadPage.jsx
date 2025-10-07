@@ -1,5 +1,4 @@
-// src/components/resume-compare/ResumeUploadPage.jsx
-import React, { useState, useRef, useCallback } from "react";
+import React, { useState, useRef, useCallback, useEffect } from "react";
 import {
   Box,
   Typography,
@@ -7,40 +6,68 @@ import {
   CardContent,
   Alert,
   Chip,
-  Stepper,
-  Step,
-  StepLabel,
-  StepContent,
   Paper,
   LinearProgress,
-  Fade,
-  Zoom,
-  Slide,
   IconButton,
+  CircularProgress,
+  Stack,
+  useTheme,
+  Avatar,
+  Button,
   Tooltip,
-  Divider,
 } from "@mui/material";
+import { alpha } from "@mui/material/styles";
 import {
-  CloudUpload as UploadIcon,
   Description as FileIcon,
-  CheckCircle as CheckIcon,
-  Error as ErrorIcon,
-  Info as InfoIcon,
-  Delete as DeleteIcon,
   Refresh as RefreshIcon,
-  Schedule as ScheduleIcon,
-  Storage as StorageIcon,
-  InsertDriveFile as DriveFileIcon,
+  Assessment as AssessmentIcon,
+  PictureAsPdf as PdfIcon,
+  ArticleOutlined as DocIcon,
+  FileUpload as FileUploadIcon,
+  CloudDone as CloudDoneIcon,
+  Close as CloseIcon,
+  Delete as DeleteIcon,
 } from "@mui/icons-material";
-import { PrimaryButton, SecondaryButton } from "../common";
-
-const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB in bytes
-const ALLOWED_FILE_TYPES = [
+import { PrimaryButton } from "../common";
+// Local file constraints
+const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+const ALLOWED_MIME_TYPES = [
   "application/pdf",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document", // .docx
-  "application/msword", // .doc
-  "application/vnd.ms-word.document.12", // .doc
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/msword",
+  "application/vnd.ms-word.document.12",
 ];
+const FILE_TYPE_MAPPING = {
+  "application/pdf": {
+    ext: "PDF",
+    icon: FileIcon,
+    color: undefined,
+    bgColor: undefined,
+  },
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": {
+    ext: "DOCX",
+    icon: DocIcon,
+    color: undefined,
+    bgColor: undefined,
+  },
+  "application/msword": {
+    ext: "DOC",
+    icon: DocIcon,
+    color: undefined,
+    bgColor: undefined,
+  },
+  "application/vnd.ms-word.document.12": {
+    ext: "DOC",
+    icon: DocIcon,
+    color: undefined,
+    bgColor: undefined,
+  },
+};
+
+// Local UI values (moved from constants)
+const UPLOAD_MAX_WIDTH = 600;
+const UPLOAD_CONTAINER_HEIGHT = 300;
+const PRIMARY_BUTTON_MIN_WIDTH = 200;
 
 const ResumeUploadPage = ({
   selectedFile,
@@ -48,49 +75,111 @@ const ResumeUploadPage = ({
   onFileSelect,
   onAnalyze,
 }) => {
+  const theme = useTheme();
   const [dragActive, setDragActive] = useState(false);
   const [fileError, setFileError] = useState(null);
-  const [uploadTime, setUploadTime] = useState(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef(null);
+  const uploadIntervalRef = useRef(null);
 
   const validateFile = useCallback((file) => {
-    // Check file type
-    if (!ALLOWED_FILE_TYPES.includes(file.type)) {
+    // Check if file exists and has required properties
+    if (!file) {
+      return {
+        valid: false,
+        error: "No file provided.",
+      };
+    }
+
+    // Check file type (handle undefined/null file.type)
+    const fileType = file.type || "";
+    if (!ALLOWED_MIME_TYPES.includes(fileType)) {
       return {
         valid: false,
         error: "Invalid file type. Please upload PDF, DOCX, or DOC files only.",
       };
     }
 
-    // Check file size
-    if (file.size > MAX_FILE_SIZE) {
+    // Check file size (handle undefined/null file.size)
+    const fileSize = file.size || 0;
+    if (fileSize > MAX_FILE_SIZE) {
       return {
         valid: false,
-        error: `File size exceeds 5MB limit. Current size: ${(
-          file.size /
-          1024 /
-          1024
-        ).toFixed(2)}MB`,
+        error: "File size exceeds the maximum limit of 5MB.",
       };
     }
-
+    if (fileSize === 0) {
+      return {
+        valid: false,
+        error: "Please select a file to upload.",
+      };
+    }
     return { valid: true, error: null };
+  }, []);
+
+  const simulateUpload = useCallback(() => {
+    setIsUploading(true);
+    setUploadProgress(0);
+
+    if (uploadIntervalRef.current) {
+      clearInterval(uploadIntervalRef.current);
+    }
+
+    uploadIntervalRef.current = setInterval(() => {
+      setUploadProgress((prev) => {
+        if (prev >= 100) {
+          clearInterval(uploadIntervalRef.current);
+          uploadIntervalRef.current = null;
+          setIsUploading(false);
+          return 100;
+        }
+        const next = Math.min(100, prev + Math.random() * 30);
+        if (next >= 100) {
+          clearInterval(uploadIntervalRef.current);
+          uploadIntervalRef.current = null;
+          setIsUploading(false);
+          return 100;
+        }
+        return next;
+      });
+    }, 100);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (uploadIntervalRef.current) {
+        clearInterval(uploadIntervalRef.current);
+      }
+    };
   }, []);
 
   const handleFileSelect = useCallback(
     (file) => {
       setFileError(null);
-      const validation = validateFile(file);
 
+      // Guard against undefined/null file
+      if (!file) {
+        setFileError("No file selected.");
+        return;
+      }
+
+      const validation = validateFile(file);
       if (!validation.valid) {
         setFileError(validation.error);
         return;
       }
 
-      setUploadTime(new Date());
-      onFileSelect(file);
+      // Only proceed if onFileSelect is provided
+      if (typeof onFileSelect === "function") {
+        simulateUpload();
+        onFileSelect(file);
+      } else {
+        console.warn("onFileSelect callback not provided");
+        setFileError("File selection handler not available.");
+      }
     },
-    [validateFile, onFileSelect]
+    [validateFile, onFileSelect, simulateUpload]
   );
 
   const handleDrag = useCallback((e) => {
@@ -99,7 +188,17 @@ const ResumeUploadPage = ({
     if (e.type === "dragenter" || e.type === "dragover") {
       setDragActive(true);
     } else if (e.type === "dragleave") {
-      setDragActive(false);
+      const rect = e.currentTarget.getBoundingClientRect();
+      const x = e.clientX;
+      const y = e.clientY;
+      if (
+        x < rect.left ||
+        x >= rect.right ||
+        y < rect.top ||
+        y >= rect.bottom
+      ) {
+        setDragActive(false);
+      }
     }
   }, []);
 
@@ -109,8 +208,15 @@ const ResumeUploadPage = ({
       e.stopPropagation();
       setDragActive(false);
 
-      if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      // Guard against undefined/null dataTransfer or files
+      if (
+        e?.dataTransfer?.files &&
+        e.dataTransfer.files.length > 0 &&
+        e.dataTransfer.files[0]
+      ) {
         handleFileSelect(e.dataTransfer.files[0]);
+      } else {
+        setFileError("No file was dropped or file is invalid.");
       }
     },
     [handleFileSelect]
@@ -118,387 +224,482 @@ const ResumeUploadPage = ({
 
   const handleFileInput = useCallback(
     (e) => {
-      if (e.target.files && e.target.files[0]) {
+      // Guard against undefined/null target or files
+      if (e?.target?.files && e.target.files.length > 0 && e.target.files[0]) {
         handleFileSelect(e.target.files[0]);
+      } else {
+        setFileError("No file selected from input.");
       }
     },
     [handleFileSelect]
   );
 
-  const handleRemoveFile = useCallback(() => {
+  const handleBrowseFiles = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  const handleDeleteFile = useCallback(() => {
+    // Only call onFileSelect if it's a function
+    if (typeof onFileSelect === "function") {
+      onFileSelect(null);
+    }
+
     setFileError(null);
-    setUploadTime(null);
-    onFileSelect(null);
+    setUploadProgress(0);
+    setIsUploading(false);
+
+    // Safely clear file input
     if (fileInputRef.current) {
-      fileInputRef.current.value = "";
+      try {
+        fileInputRef.current.value = "";
+      } catch (error) {
+        console.warn("Could not clear file input:", error);
+      }
     }
   }, [onFileSelect]);
 
   const formatFileSize = (bytes) => {
+    // Handle undefined, null, or invalid bytes
+    if (bytes === null || bytes === undefined || isNaN(bytes) || bytes < 0) {
+      return "0 Bytes";
+    }
+
     if (bytes === 0) return "0 Bytes";
+
     const k = 1024;
     const sizes = ["Bytes", "KB", "MB", "GB"];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+
+    // Guard against invalid index
+    const sizeIndex = Math.min(i, sizes.length - 1);
+    const size = sizes[sizeIndex] || "Bytes";
+
+    try {
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + size;
+    } catch {
+      return "Unknown size";
+    }
   };
 
-  const getFileTypeIcon = (fileType) => {
-    if (fileType.includes("pdf")) return "📄";
-    if (fileType.includes("word") || fileType.includes("document")) return "📝";
-    return "📄";
+  const getFileTypeInfo = (fileType) => {
+    // Handle undefined/null fileType
+    const safeFileType = fileType || "";
+
+    return (
+      FILE_TYPE_MAPPING[safeFileType] || {
+        ext: "Unknown",
+        icon: FileIcon,
+        color: theme?.palette?.text?.secondary || "#666",
+        bgColor: theme?.palette?.grey?.[100] || "#f5f5f5",
+      }
+    );
   };
 
-  const steps = [
-    {
-      label: "Upload Resume",
-      description: "Drag & drop or click to upload your resume",
-      completed: !!selectedFile,
-    },
-    {
-      label: "Validation",
-      description: "File type and size verification",
-      completed: !!selectedFile && !fileError,
-    },
-    {
-      label: "Ready for Analysis",
-      description: "Resume ready to be analyzed",
-      completed: !!selectedFile && !fileError,
-    },
-  ];
+  const hasValidFile = selectedFile && !fileError;
+  const showUploadedState =
+    hasValidFile && !isUploading && uploadProgress === 100;
 
   return (
     <Box
       sx={{
-        maxWidth: 800,
-        mx: "auto",
-        p: 2,
         width: "100%",
-        minHeight: "fit-content",
+        maxWidth: UPLOAD_MAX_WIDTH,
+        mx: "auto",
+        display: "flex",
+        flexDirection: "column",
+        gap: 3,
       }}>
       {/* Header */}
-      <Fade in timeout={600}>
-        <Box sx={{ textAlign: "center", mb: 4 }}>
+      <Box sx={{ textAlign: "center", mb: 1 }}>
+        <Typography variant="h6" sx={{ fontWeight: 600 }}>
+          Upload Your Resume
+        </Typography>
+        <Typography variant="body2" color="text.secondary">
+          Click to upload or drag & drop your file here
+        </Typography>
+      </Box>
+
+      {/* Upload Card */}
+      <Paper
+        sx={{
+          border: fileError
+            ? `2px solid ${theme.palette.error.main}`
+            : showUploadedState
+            ? `2px solid ${theme.palette.success.main}`
+            : dragActive
+            ? `2px solid ${theme.palette.primary.main}`
+            : `2px dashed ${theme.palette.divider}`,
+          borderRadius: 2,
+          overflow: "hidden",
+          transition: "all 0.3s ease",
+          width: "100%",
+          minHeight: UPLOAD_CONTAINER_HEIGHT,
+        }}>
+        {/* Error State */}
+        {fileError && (
           <Box
             sx={{
-              display: "inline-flex",
-              alignItems: "center",
+              p: 3,
+              minHeight: UPLOAD_CONTAINER_HEIGHT,
+              display: "flex",
+              flexDirection: "column",
               justifyContent: "center",
-              width: 80,
-              height: 80,
-              borderRadius: "50%",
-              bgcolor: "primary.main",
-              color: "white",
-              mb: 2,
-              boxShadow: 3,
+              alignItems: "center",
+              gap: 2,
             }}>
-            <UploadIcon sx={{ fontSize: 40 }} />
+            <Alert
+              severity="error"
+              sx={{ borderRadius: 2, width: "100%", maxWidth: 480 }}
+              action={
+                <IconButton
+                  aria-label="close"
+                  color="inherit"
+                  size="small"
+                  onClick={() => setFileError(null)}>
+                  <CloseIcon fontSize="inherit" />
+                </IconButton>
+              }>
+              <Typography variant="body1" sx={{ fontWeight: 600 }}>
+                Upload Failed
+              </Typography>
+              <Typography variant="body2" sx={{ mt: 0.5 }}>
+                {fileError}
+              </Typography>
+            </Alert>
+            <Stack direction="row" spacing={2}>
+              <Button
+                variant="contained"
+                startIcon={<RefreshIcon />}
+                onClick={handleBrowseFiles}>
+                Browse Files
+              </Button>
+              <Button variant="outlined" onClick={() => setFileError(null)}>
+                Dismiss
+              </Button>
+            </Stack>
           </Box>
-          <Typography variant="h4" sx={{ fontWeight: 700, mb: 1 }}>
-            Upload Your Resume
-          </Typography>
-          <Typography
-            variant="body1"
-            color="text.secondary"
-            sx={{ maxWidth: 500, mx: "auto" }}>
-            Upload your resume in PDF, DOCX, or DOC format (max 5MB) to analyze
-            it against the job description
-          </Typography>
-        </Box>
-      </Fade>
+        )}
 
-      {/* Stepper */}
-      <Fade in timeout={800}>
-        <Paper elevation={2} sx={{ mb: 4, p: 3, borderRadius: 3 }}>
-          <Stepper
-            activeStep={selectedFile ? (fileError ? 1 : 2) : 0}
-            orientation="horizontal">
-            {steps.map((step) => (
-              <Step key={step.label} completed={step.completed}>
-                <StepLabel
-                  sx={{
-                    "& .MuiStepLabel-label": {
-                      fontSize: "0.875rem",
-                      fontWeight: 600,
-                    },
-                  }}>
-                  {step.label}
-                </StepLabel>
-              </Step>
-            ))}
-          </Stepper>
-        </Paper>
-      </Fade>
-
-      {/* Upload Area */}
-      <Fade in timeout={1000}>
-        <Card
-          sx={{
-            borderRadius: 3,
-            boxShadow: 3,
-            overflow: "hidden",
-            border: dragActive ? "2px solid" : "2px solid transparent",
-            borderColor: dragActive ? "primary.main" : "transparent",
-            transition: "all 0.3s ease",
-            width: "100%",
-            maxWidth: "100%",
-          }}>
-          <CardContent sx={{ p: 0 }}>
-            {/* Upload Zone */}
-            <Box
-              onClick={() => fileInputRef.current?.click()}
-              onDragEnter={handleDrag}
-              onDragLeave={handleDrag}
-              onDragOver={handleDrag}
-              onDrop={handleDrop}
-              sx={{
-                p: 6,
-                textAlign: "center",
-                cursor: "pointer",
-                bgcolor: dragActive ? "primary.50" : "background.default",
-                transition: "all 0.3s ease",
-                minHeight: 200,
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                justifyContent: "center",
-                "&:hover": {
-                  bgcolor: "primary.50",
-                },
-              }}>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".pdf,.docx,.doc"
-                onChange={handleFileInput}
-                style={{ display: "none" }}
-              />
-
-              {selectedFile ? (
-                <Zoom in>
-                  <Box sx={{ textAlign: "center" }}>
-                    <Box
-                      sx={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        width: 60,
-                        height: 60,
-                        borderRadius: "50%",
-                        bgcolor: "success.main",
-                        color: "white",
-                        mb: 2,
-                      }}>
-                      <CheckIcon sx={{ fontSize: 30 }} />
-                    </Box>
-                    <Typography variant="h6" sx={{ fontWeight: 600, mb: 1 }}>
-                      {selectedFile.name}
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      {formatFileSize(selectedFile.size)}
-                    </Typography>
-                  </Box>
-                </Zoom>
-              ) : (
-                <Box>
-                  <Box
-                    sx={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      width: 80,
-                      height: 80,
-                      borderRadius: "50%",
-                      bgcolor: "grey.100",
-                      color: "text.secondary",
-                      mb: 3,
-                    }}>
-                    <UploadIcon sx={{ fontSize: 40 }} />
-                  </Box>
-                  <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
-                    Drop your resume here or click to browse
-                  </Typography>
-                  <Typography
-                    variant="body2"
-                    color="text.secondary"
-                    sx={{ mb: 2 }}>
-                    Supports PDF, DOCX, and DOC files up to 5MB
-                  </Typography>
-                  <Box
-                    sx={{
-                      display: "flex",
-                      gap: 1,
-                      justifyContent: "center",
-                      flexWrap: "wrap",
-                    }}>
-                    <Chip label="PDF" size="small" variant="outlined" />
-                    <Chip label="DOCX" size="small" variant="outlined" />
-                    <Chip label="DOC" size="small" variant="outlined" />
-                    <Chip
-                      label="Max 5MB"
-                      size="small"
-                      variant="outlined"
-                      color="primary"
-                    />
-                  </Box>
-                </Box>
-              )}
-            </Box>
-
-            {/* File Details */}
-            {selectedFile && (
-              <Slide direction="up" in>
-                <Box sx={{ p: 3, bgcolor: "grey.50" }}>
-                  <Box
-                    sx={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      mb: 2,
-                    }}>
-                    <Typography variant="h6" sx={{ fontWeight: 600 }}>
-                      File Details
-                    </Typography>
-                    <Tooltip title="Remove file">
-                      <IconButton
-                        onClick={handleRemoveFile}
-                        color="error"
-                        size="small">
-                        <DeleteIcon />
-                      </IconButton>
-                    </Tooltip>
-                  </Box>
-
-                  <Box
-                    sx={{
-                      display: "grid",
-                      gridTemplateColumns:
-                        "repeat(auto-fit, minmax(180px, 1fr))",
-                      gap: 2,
-                    }}>
-                    <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                      <DriveFileIcon color="primary" />
-                      <Box>
-                        <Typography variant="body2" color="text.secondary">
-                          File Name
-                        </Typography>
-                        <Typography variant="body1" sx={{ fontWeight: 500 }}>
-                          {selectedFile.name}
-                        </Typography>
-                      </Box>
-                    </Box>
-
-                    <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                      <StorageIcon color="primary" />
-                      <Box>
-                        <Typography variant="body2" color="text.secondary">
-                          File Size
-                        </Typography>
-                        <Typography variant="body1" sx={{ fontWeight: 500 }}>
-                          {formatFileSize(selectedFile.size)}
-                        </Typography>
-                      </Box>
-                    </Box>
-
-                    <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                      <ScheduleIcon color="primary" />
-                      <Box>
-                        <Typography variant="body2" color="text.secondary">
-                          Upload Time
-                        </Typography>
-                        <Typography variant="body1" sx={{ fontWeight: 500 }}>
-                          {uploadTime?.toLocaleTimeString()}
-                        </Typography>
-                      </Box>
-                    </Box>
-
-                    <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                      <FileIcon color="primary" />
-                      <Box>
-                        <Typography variant="body2" color="text.secondary">
-                          File Type
-                        </Typography>
-                        <Typography variant="body1" sx={{ fontWeight: 500 }}>
-                          {getFileTypeIcon(selectedFile.type)}{" "}
-                          {selectedFile.type.split("/")[1].toUpperCase()}
-                        </Typography>
-                      </Box>
-                    </Box>
-                  </Box>
-                </Box>
-              </Slide>
-            )}
-
-            {/* Error Display */}
-            {fileError && (
-              <Slide direction="up" in>
-                <Box sx={{ p: 3, bgcolor: "error.50" }}>
-                  <Alert severity="error" icon={<ErrorIcon />}>
-                    <Typography variant="body1" sx={{ fontWeight: 500 }}>
-                      {fileError}
-                    </Typography>
-                  </Alert>
-                </Box>
-              </Slide>
-            )}
-
-            {/* Success Message */}
-            {selectedFile && !fileError && (
-              <Slide direction="up" in>
-                <Box sx={{ p: 3, bgcolor: "success.50" }}>
-                  <Alert severity="success" icon={<CheckIcon />}>
-                    <Typography variant="body1" sx={{ fontWeight: 500 }}>
-                      File uploaded successfully! Ready for analysis.
-                    </Typography>
-                  </Alert>
-                </Box>
-              </Slide>
-            )}
-          </CardContent>
-        </Card>
-      </Fade>
-
-      {/* Action Buttons */}
-      <Fade in timeout={1200}>
-        <Box sx={{ mt: 4, textAlign: "center" }}>
-          <PrimaryButton
-            onClick={onAnalyze}
-            disabled={!selectedFile || !!fileError || isAnalyzing}
-            size="large"
-            startIcon={<UploadIcon />}
+        {/* Uploading State */}
+        {isUploading && selectedFile && (
+          <Box
             sx={{
-              px: 4,
-              py: 1.5,
-              fontSize: "1.1rem",
-              borderRadius: 2,
-              boxShadow: 2,
+              p: 3,
+              minHeight: UPLOAD_CONTAINER_HEIGHT,
+              display: "flex",
+              flexDirection: "column",
+              justifyContent: "center",
+              alignItems: "center",
+              gap: 2,
             }}>
-            {isAnalyzing ? "Analyzing..." : "Send for Analysis"}
-          </PrimaryButton>
-        </Box>
-      </Fade>
-
-      {/* Progress Bar for Analysis */}
-      {isAnalyzing && (
-        <Fade in timeout={300}>
-          <Box sx={{ mt: 3 }}>
+            <Box sx={{ position: "relative" }}>
+              <CircularProgress
+                variant="determinate"
+                value={uploadProgress}
+                size={64}
+                thickness={4}
+                sx={{
+                  color: theme.palette.primary.main,
+                  "& .MuiCircularProgress-circle": { strokeLinecap: "round" },
+                }}
+              />
+              <Box
+                sx={{
+                  position: "absolute",
+                  top: "50%",
+                  left: "50%",
+                  transform: "translate(-50%, -50%)",
+                }}>
+                <Typography variant="body1" sx={{ fontWeight: 600 }}>
+                  {Math.round(uploadProgress)}%
+                </Typography>
+              </Box>
+            </Box>
+            <Typography variant="body2" color="text.secondary">
+              Uploading {selectedFile?.name || "file"}
+            </Typography>
             <LinearProgress
+              variant="determinate"
+              value={uploadProgress}
               sx={{
-                height: 8,
-                borderRadius: 4,
-                bgcolor: "grey.200",
+                width: "80%",
+                maxWidth: 480,
+                height: 6,
+                borderRadius: 3,
+                bgcolor: alpha(theme.palette.primary.main, 0.1),
                 "& .MuiLinearProgress-bar": {
-                  borderRadius: 4,
+                  borderRadius: 3,
                 },
               }}
             />
+          </Box>
+        )}
+
+        {/* Successfully Uploaded State */}
+        {showUploadedState && (
+          <Box
+            sx={{
+              p: 2,
+              minHeight: UPLOAD_CONTAINER_HEIGHT,
+              display: "flex",
+              flexDirection: "column",
+              justifyContent: "center",
+              alignItems: "center",
+              gap: 1.5,
+              bgcolor: alpha(theme.palette.success.main, 0.05),
+            }}>
+            {/* Success Icon and Message */}
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}>
+              <CloudDoneIcon sx={{ fontSize: 20, color: "success.main" }} />
+              <Typography
+                variant="body2"
+                sx={{ fontWeight: 600, color: "success.main" }}>
+                Upload Successful
+              </Typography>
+            </Box>
+
+            {/* File Details */}
+            <Box
+              sx={{
+                width: "100%",
+                maxWidth: 480,
+                display: "flex",
+                alignItems: "center",
+                gap: 1.5,
+                p: 1.5,
+                borderRadius: 1,
+                border: `1px solid ${alpha(theme.palette.success.main, 0.3)}`,
+                bgcolor: alpha(theme.palette.success.main, 0.02),
+              }}>
+              {/* File Type Icon */}
+              <Box
+                sx={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 32,
+                  height: 32,
+                  borderRadius: 1,
+                  bgcolor: alpha(theme.palette.success.main, 0.1),
+                  flexShrink: 0,
+                }}>
+                {React.createElement(getFileTypeInfo(selectedFile?.type).icon, {
+                  sx: {
+                    fontSize: 16,
+                    color: theme.palette.success.main,
+                  },
+                })}
+              </Box>
+
+              {/* File Details */}
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Tooltip title={selectedFile?.name || "Unknown file"}>
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      fontWeight: 600,
+                      fontSize: "0.8rem",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      color: "text.primary",
+                    }}>
+                    {selectedFile?.name || "Unknown file"}
+                  </Typography>
+                </Tooltip>
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ fontSize: "0.7rem" }}>
+                  {formatFileSize(selectedFile?.size)} •{" "}
+                  {getFileTypeInfo(selectedFile?.type).ext}
+                </Typography>
+              </Box>
+            </Box>
+
+            {/* Action Buttons */}
+            <Box sx={{ display: "flex", gap: 1, mt: 0.5 }}>
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={handleBrowseFiles}
+                sx={{
+                  fontSize: "0.75rem",
+                  py: 0.5,
+                  px: 1.5,
+                  minWidth: "auto",
+                }}>
+                Replace
+              </Button>
+              <Button
+                variant="outlined"
+                color="error"
+                size="small"
+                onClick={handleDeleteFile}
+                startIcon={<DeleteIcon sx={{ fontSize: 14 }} />}
+                sx={{
+                  fontSize: "0.75rem",
+                  py: 0.5,
+                  px: 1.5,
+                  minWidth: "auto",
+                }}>
+                Remove
+              </Button>
+            </Box>
+
             <Typography
-              variant="body2"
+              variant="caption"
               color="text.secondary"
-              sx={{ mt: 1, textAlign: "center" }}>
-              Analyzing your resume against the job description...
+              sx={{ fontSize: "0.7rem", textAlign: "center" }}>
+              You can replace or remove the file before analyzing
             </Typography>
           </Box>
-        </Fade>
+        )}
+
+        {/* Initial Upload State */}
+        {!selectedFile && !fileError && (
+          <Box
+            component="label"
+            onDragEnter={handleDrag}
+            onDragLeave={handleDrag}
+            onDragOver={handleDrag}
+            onDrop={handleDrop}
+            sx={{
+              minHeight: UPLOAD_CONTAINER_HEIGHT,
+              width: "100%",
+              textAlign: "center",
+              cursor: "pointer",
+              bgcolor: dragActive
+                ? alpha(theme.palette.primary.main, 0.04)
+                : "transparent",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              transition: "all 0.3s ease",
+              p: 3,
+              gap: 1,
+            }}>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.docx,.doc"
+              onChange={handleFileInput}
+              style={{ display: "none" }}
+            />
+            <Box
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 64,
+                height: 64,
+                borderRadius: "50%",
+                bgcolor: dragActive
+                  ? theme.palette.primary.main
+                  : alpha(theme.palette.primary.main, 0.08),
+                color: dragActive ? "white" : "primary.main",
+                transition: "all 0.3s ease",
+                mb: 1,
+              }}>
+              <FileUploadIcon sx={{ fontSize: 28 }} />
+            </Box>
+            <Typography variant="body1" sx={{ fontWeight: 600 }}>
+              {dragActive ? "Drop file here" : "Click to upload or drag & drop"}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Supports PDF, DOCX, and DOC files up to {5}MB
+            </Typography>
+          </Box>
+        )}
+
+        {/* Hidden input for Replace button when file already selected */}
+        {selectedFile && (
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".pdf,.docx,.doc"
+            onChange={handleFileInput}
+            style={{ display: "none" }}
+          />
+        )}
+      </Paper>
+
+      {/* Analyze Button */}
+      <Box sx={{ textAlign: "center" }}>
+        <PrimaryButton
+          onClick={typeof onAnalyze === "function" ? onAnalyze : undefined}
+          disabled={
+            !showUploadedState || isAnalyzing || typeof onAnalyze !== "function"
+          }
+          size="large"
+          startIcon={
+            isAnalyzing ? (
+              <CircularProgress size={20} color="inherit" />
+            ) : (
+              <AssessmentIcon />
+            )
+          }
+          sx={{
+            minWidth: PRIMARY_BUTTON_MIN_WIDTH,
+            py: 1.5,
+            fontSize: "1rem",
+            fontWeight: 600,
+            borderRadius: 2,
+            background:
+              showUploadedState && !isAnalyzing
+                ? "linear-gradient(45deg, #2196F3 30%, #21CBF3 90%)"
+                : undefined,
+            "&:hover": {
+              background:
+                showUploadedState && !isAnalyzing
+                  ? "linear-gradient(45deg, #1976d2 30%, #1e88e5 90%)"
+                  : undefined,
+              transform:
+                showUploadedState && !isAnalyzing ? "translateY(-1px)" : "none",
+            },
+          }}>
+          {isAnalyzing ? "Analyzing Resume..." : "Analyze Resume"}
+        </PrimaryButton>
+
+        {!selectedFile && !fileError && (
+          <Typography
+            variant="body2"
+            color="text.secondary"
+            sx={{ mt: 2, fontStyle: "italic" }}>
+            Please upload a resume file to enable analysis
+          </Typography>
+        )}
+      </Box>
+
+      {/* Analysis Progress (inline card beneath button when analyzing) */}
+      {isAnalyzing && (
+        <Card sx={{ borderRadius: 2 }}>
+          <CardContent sx={{ p: 3 }}>
+            <Stack spacing={2}>
+              <Stack direction="row" alignItems="center" spacing={2}>
+                <CircularProgress size={24} />
+                <Typography variant="body1" sx={{ fontWeight: 500 }}>
+                  Analyzing your resume...
+                </Typography>
+              </Stack>
+              <LinearProgress
+                sx={{
+                  height: 6,
+                  borderRadius: 3,
+                  bgcolor: alpha(theme.palette.primary.main, 0.1),
+                }}
+              />
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{ textAlign: "center" }}>
+                This may take a few moments while we analyze your resume against
+                the job description
+              </Typography>
+            </Stack>
+          </CardContent>
+        </Card>
       )}
     </Box>
   );
