@@ -1,63 +1,93 @@
-// Global error handling middleware
-export const errorHandler = (err, req, res, next) => {
-  console.error("Error:", err);
+import { APP_CONFIG } from "../config/config.js";
 
-  // Handle specific error types
-  if (err.name === "ValidationError") {
+/**
+ * Global error handling middleware
+ * @param {Error} error - Error object
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ * @param {Function} next - Express next function
+ */
+export const errorHandler = (error, req, res, next) => {
+  console.error("Global error handler:", error);
+
+  // Handle validation errors
+  if (error.name === "ValidationError") {
     return res.status(400).json({
-      error: "Validation Error",
-      details: err.message,
-    });
-  }
-
-  if (err.name === "UnauthorizedError") {
-    return res.status(401).json({
-      error: "Unauthorized",
-      details: err.message,
+      success: false,
+      data: "Validation failed",
     });
   }
 
   // Handle Google API errors
-  if (err.response && err.response.status) {
-    const status = err.response.status;
+  if (error.code && error.code.startsWith("GOOGLE_API_")) {
+    let statusCode = 500;
     let message = "Google API error";
 
-    switch (status) {
-      case 403:
-        message =
-          "Permission denied. The application may not have access to this resource.";
-        break;
-      case 404:
-        message =
-          "Resource not found. The provided ID might be incorrect or the resource was deleted.";
-        break;
-      case 429:
-        message = "Rate limit exceeded. Please try again later.";
-        break;
-      default:
-        message = `Google API error: ${err.message}`;
+    if (error.response && error.response.status) {
+      statusCode = error.response.status;
+
+      switch (statusCode) {
+        case 403:
+          message =
+            "Permission denied. The application may not have access to this resource.";
+          break;
+        case 404:
+          message =
+            "Resource not found. The provided ID might be incorrect or the resource was deleted.";
+          break;
+        case 429:
+          message = "Rate limit exceeded. Please try again later.";
+          break;
+        default:
+          message = `Google API error: ${error.message}`;
+      }
     }
 
-    return res.status(status).json({
-      error: message,
-      details: err.response.data,
+    return res.status(statusCode).json({
+      success: false,
+      data: message,
     });
   }
 
-  // Default error response
-  res.status(500).json({
-    error: "Internal Server Error",
-    message:
-      process.env.NODE_ENV === "development"
-        ? err.message
-        : "Something went wrong",
+  // Handle file upload errors
+  if (
+    error.code === "LIMIT_FILE_SIZE" ||
+    error.code === "LIMIT_UNEXPECTED_FILE"
+  ) {
+    return res.status(400).json({
+      success: false,
+      data: "File upload failed",
+    });
+  }
+
+  // Handle AI service errors
+  if (error.message && error.message.includes("AI")) {
+    return res.status(500).json({
+      success: false,
+      data: "AI service error",
+    });
+  }
+
+  // Handle general internal server errors
+  const message =
+    APP_CONFIG.SERVER.NODE_ENV === "development"
+      ? error.message
+      : "Internal server error";
+
+  return res.status(500).json({
+    success: false,
+    data: message,
   });
 };
 
-// 404 handler for undefined routes
+/**
+ * 404 Not Found handler
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
 export const notFoundHandler = (req, res) => {
-  res.status(404).json({
-    error: "Route not found",
-    message: `The route ${req.method} ${req.originalUrl} does not exist`,
+  return res.status(404).json({
+    success: false,
+    data: "Endpoint not found",
   });
 };

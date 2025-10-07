@@ -1,20 +1,23 @@
-import { Document, Packer, Paragraph, TextRun } from "docx";
-import PDFDocument from "pdfkit";
 import { AIService } from "./aiService.js";
 import { ResumeTemplateService } from "./resumeTemplateService.js";
+import { AutomatedResumeService } from "./automatedResumeService.js";
+import { LaTeXTemplateService } from "./latexTemplateService.js";
 
-export class ResumeService {
-  constructor() {
-    this.resumes = new Map();
-    this.optimizedResumes = new Map();
-    this.templateService = new ResumeTemplateService();
-  }
+// Initialize services
+const templateService = ResumeTemplateService;
+const automatedService = AutomatedResumeService;
+const latexService = LaTeXTemplateService;
 
-  storeResume(fileName, resumeText) {
+// In-memory storage (in production, use a proper database)
+const resumes = new Map();
+const optimizedResumes = new Map();
+
+export const ResumeService = {
+  storeResume: (fileName, resumeText) => {
     const resumeId = `resume_${Date.now()}_${Math.random()
       .toString(36)
-      .substr(2, 9)}`;
-    this.resumes.set(fileName, {
+      .slice(2, 9)}`;
+    resumes.set(fileName, {
       id: resumeId,
       fileName,
       text: resumeText,
@@ -22,19 +25,19 @@ export class ResumeService {
       type: "original",
     });
     return resumeId;
-  }
+  },
 
-  getResumeByFileName(fileName) {
-    return this.resumes.get(fileName);
-  }
+  getResumeByFileName: (fileName) => {
+    return resumes.get(fileName);
+  },
 
-  storeOptimizedResume(originalFileName, optimizedText) {
+  storeOptimizedResume: (originalFileName, optimizedText) => {
     const optimizedId = `optimized_${Date.now()}_${Math.random()
       .toString(36)
       .substr(2, 9)}`;
     const optimizedFileName = `optimized_${originalFileName}`;
 
-    this.optimizedResumes.set(originalFileName, {
+    optimizedResumes.set(originalFileName, {
       id: optimizedId,
       originalFileName,
       optimizedFileName,
@@ -44,14 +47,14 @@ export class ResumeService {
     });
 
     return optimizedId;
-  }
+  },
 
-  getOptimizedResume(originalFileName) {
-    return this.optimizedResumes.get(originalFileName);
-  }
+  getOptimizedResume: (originalFileName) => {
+    return optimizedResumes.get(originalFileName);
+  },
 
-  getResumeSummary(resumeId) {
-    for (const [fileName, resume] of this.resumes) {
+  getResumeSummary: (resumeId) => {
+    for (const [fileName, resume] of resumes) {
       if (resume.id === resumeId) {
         return {
           id: resume.id,
@@ -59,12 +62,12 @@ export class ResumeService {
           type: resume.type,
           uploadedAt: resume.uploadedAt,
           wordCount: resume.text.split(/\s+/).length,
-          hasOptimizedVersion: this.optimizedResumes.has(fileName),
+          hasOptimizedVersion: optimizedResumes.has(fileName),
         };
       }
     }
 
-    for (const [originalFileName, optimizedResume] of this.optimizedResumes) {
+    for (const [originalFileName, optimizedResume] of optimizedResumes) {
       if (optimizedResume.id === resumeId) {
         return {
           id: optimizedResume.id,
@@ -78,246 +81,263 @@ export class ResumeService {
     }
 
     return null;
-  }
+  },
 
-  async analyzeResumeWithJob(resumeText, jobDescription) {
-    const aiService = new AIService();
-    return await aiService.compareResumeWithJob(resumeText, jobDescription);
-  }
-
-  async generateProfessionalResume(
-    resumeData,
-    templateType = "clean",
-    jobData = null
-  ) {
+  generateProfessionalResume: async (resumeData, jobData = null) => {
     try {
-      const fileName = this.generateFileName(templateType, jobData);
+      const fileName = ResumeService.generateFileName(jobData);
 
-      const pdfBuffer = await this.templateService.generateResume(
-        resumeData,
-        templateType
-      );
+      const pdfBuffer = await templateService.generateResume(resumeData);
 
       return {
         buffer: pdfBuffer,
         fileName: fileName,
-        templateType: templateType,
+        type: "pdf",
       };
     } catch (error) {
       console.error("Error generating professional resume:", error);
       throw error;
     }
-  }
+  },
 
-  generateFileName(templateType, jobData) {
-    const timestamp = new Date().toISOString().split("T")[0];
-    let baseName = `Resume_${templateType}_${timestamp}`;
+  generateFileName: (jobData) => {
+    const timestamp = new Date().toISOString().slice(0, 10);
+    const jobTitle = jobData?.title?.replace(/[^a-zA-Z0-9]/g, "_") || "resume";
+    return `${jobTitle}_resume_${timestamp}.pdf`;
+  },
 
-    if (jobData) {
-      const companyName =
-        jobData.company ||
-        jobData.companyName ||
-        jobData.employer ||
-        jobData["Company Name"] ||
-        "Company";
-
-      const cleanCompanyName = companyName
-        .replace(/[^a-zA-Z0-9\s]/g, "")
-        .replace(/\s+/g, "_")
-        .substring(0, 20);
-
-      baseName = `${cleanCompanyName}_${templateType}_Resume_${timestamp}`;
-    }
-
-    return `${baseName}.pdf`;
-  }
-
-  getAvailableTemplates() {
-    return this.templateService.getAvailableTemplates();
-  }
-
-  async generateEnhancedPDF(
-    optimizedResumeText,
-    templateType = "clean",
-    jobData = null
-  ) {
+  generateEnhancedPDF: async (optimizedResumeText, jobData = null) => {
     try {
-      const result = await this.generateProfessionalResume(
-        optimizedResumeText,
-        templateType,
-        jobData
-      );
+      const fileName = ResumeService.generateFileName(jobData);
+      const pdfBuffer = await templateService.generateResume({
+        content: optimizedResumeText,
+      });
 
       return {
-        buffer: result.buffer,
-        fileName: result.fileName,
-        templateType: result.templateType,
+        buffer: pdfBuffer,
+        fileName: fileName,
+        type: "pdf",
       };
     } catch (error) {
       console.error("Error generating enhanced PDF:", error);
       throw error;
     }
-  }
+  },
 
-  async generateDOCXResume(resumeData) {
+  generateAutomatedPDF: async (resumeData) => {
     try {
-      let resumeText;
-      if (typeof resumeData === "string") {
-        resumeText = resumeData;
-      } else if (resumeData && typeof resumeData === "object") {
-        resumeText =
-          resumeData.text ||
-          resumeData.content ||
-          resumeData.summary ||
-          JSON.stringify(resumeData);
-      } else {
-        throw new Error("Invalid resume data provided");
-      }
+      const fileName = `automated_resume_${Date.now()}.pdf`;
+      const pdfBuffer = await automatedService.generatePDF(resumeData);
 
-      if (!resumeText || resumeText.trim().length === 0) {
-        throw new Error("Resume text is empty");
-      }
-
-      const resumeLines = resumeText
-        .split("\n")
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0);
-      const children = [];
-
-      resumeLines.forEach((line) => {
-        if (this.isHeader(line)) {
-          children.push(
-            new Paragraph({
-              children: [
-                new TextRun({
-                  text: line,
-                  bold: true,
-                  size: 28,
-                }),
-              ],
-            })
-          );
-        } else if (line.startsWith("•") || line.startsWith("-")) {
-          children.push(
-            new Paragraph({
-              children: [
-                new TextRun({
-                  text: line,
-                  size: 22,
-                }),
-              ],
-            })
-          );
-        } else if (this.isContactInfo(line)) {
-          children.push(
-            new Paragraph({
-              children: [
-                new TextRun({
-                  text: line,
-                  size: 22,
-                }),
-              ],
-            })
-          );
-        } else if (this.isDateRange(line)) {
-          children.push(
-            new Paragraph({
-              children: [
-                new TextRun({
-                  text: line,
-                  size: 20,
-                  italics: true,
-                }),
-              ],
-            })
-          );
-        } else {
-          children.push(
-            new Paragraph({
-              children: [
-                new TextRun({
-                  text: line,
-                  size: 22,
-                }),
-              ],
-            })
-          );
-        }
-      });
-
-      const doc = new Document({
-        sections: [
-          {
-            properties: {},
-            children: children,
-          },
-        ],
-      });
-
-      return await Packer.toBuffer(doc);
+      return {
+        buffer: pdfBuffer,
+        fileName: fileName,
+        type: "pdf",
+      };
     } catch (error) {
-      console.error("Error generating DOCX:", error);
+      console.error("Error generating automated PDF:", error);
       throw error;
     }
-  }
+  },
 
-  isHeader(line) {
-    const headers = [
-      "PROFESSIONAL SUMMARY",
-      "SUMMARY",
-      "OBJECTIVE",
-      "CORE COMPETENCIES",
-      "SKILLS",
-      "TECHNICAL SKILLS",
-      "PROFESSIONAL EXPERIENCE",
-      "WORK EXPERIENCE",
-      "EXPERIENCE",
-      "EDUCATION",
-      "CERTIFICATIONS",
-      "PROJECTS",
-      "ACHIEVEMENTS",
-    ];
-    return headers.some((header) => line.toUpperCase().includes(header));
-  }
+  generateAutomatedDOCX: async (resumeData) => {
+    try {
+      const fileName = `automated_resume_${Date.now()}.docx`;
+      const docxBuffer = await automatedService.generateDOCX(resumeData);
 
-  isContactInfo(line) {
+      return {
+        buffer: docxBuffer,
+        fileName: fileName,
+        type: "docx",
+      };
+    } catch (error) {
+      console.error("Error generating automated DOCX:", error);
+      throw error;
+    }
+  },
+
+  validateATSCompatibility: async (generatedContent) => {
+    try {
+      // Basic ATS validation logic
+      const lines = generatedContent.split("\n");
+      let hasContactInfo = false;
+      let hasExperience = false;
+      let hasSkills = false;
+
+      for (const line of lines) {
+        const trimmedLine = line.trim().toLowerCase();
+        if (trimmedLine.includes("@") || trimmedLine.includes("phone")) {
+          hasContactInfo = true;
+        }
+        if (
+          trimmedLine.includes("experience") ||
+          trimmedLine.includes("work")
+        ) {
+          hasExperience = true;
+        }
+        if (
+          trimmedLine.includes("skills") ||
+          trimmedLine.includes("competencies")
+        ) {
+          hasSkills = true;
+        }
+      }
+
+      return {
+        isATSCompatible: hasContactInfo && hasExperience && hasSkills,
+        missingSections: {
+          contactInfo: !hasContactInfo,
+          experience: !hasExperience,
+          skills: !hasSkills,
+        },
+      };
+    } catch (error) {
+      console.error("Error in ATS validation:", error);
+      return {
+        isATSCompatible: false,
+        error: error.message,
+      };
+    }
+  },
+
+  isHeader: (line) => {
+    const trimmedLine = line.trim();
     return (
-      /@/.test(line) ||
-      /\d{3}[-.\s]?\d{3}[-.\s]?\d{4}/.test(line) ||
-      line.toLowerCase().includes("linkedin") ||
-      line.toLowerCase().includes("github")
+      trimmedLine.length > 0 &&
+      trimmedLine.length < 100 &&
+      !trimmedLine.includes("•") &&
+      !trimmedLine.includes("-") &&
+      !trimmedLine.includes(":") &&
+      trimmedLine.split(" ").length <= 8
     );
-  }
+  },
 
-  isDateRange(line) {
+  isContactInfo: (line) => {
+    const trimmedLine = line.trim().toLowerCase();
     return (
-      /\d{1,2}\/\d{4}/.test(line) ||
-      /\d{4}\s*-\s*\d{4}/.test(line) ||
-      /\d{4}\s*-\s*Present/.test(line)
+      trimmedLine.includes("@") ||
+      trimmedLine.includes("phone") ||
+      trimmedLine.includes("linkedin") ||
+      trimmedLine.includes("github")
     );
-  }
+  },
 
-  deleteResume(resumeId) {
-    for (const [fileName, resume] of this.resumes) {
+  isDateRange: (line) => {
+    const trimmedLine = line.trim();
+    const datePattern = /\d{4}/;
+    return datePattern.test(trimmedLine);
+  },
+
+  deleteResume: (resumeId) => {
+    for (const [fileName, resume] of resumes) {
       if (resume.id === resumeId) {
-        this.resumes.delete(fileName);
+        resumes.delete(fileName);
         return true;
       }
     }
 
-    for (const [originalFileName, optimizedResume] of this.optimizedResumes) {
+    for (const [originalFileName, optimizedResume] of optimizedResumes) {
       if (optimizedResume.id === resumeId) {
-        this.optimizedResumes.delete(originalFileName);
+        optimizedResumes.delete(originalFileName);
         return true;
       }
     }
 
     return false;
-  }
+  },
 
-  deleteResumeByFileName(fileName) {
-    const deleted = this.resumes.delete(fileName);
-    const optimizedDeleted = this.optimizedResumes.delete(fileName);
-    return deleted || optimizedDeleted;
-  }
-}
+  deleteResumeByFileName: (fileName) => {
+    if (resumes.has(fileName)) {
+      resumes.delete(fileName);
+      return true;
+    }
+
+    if (optimizedResumes.has(fileName)) {
+      optimizedResumes.delete(fileName);
+      return true;
+    }
+
+    return false;
+  },
+
+  getAllResumes: () => {
+    return Array.from(resumes.values());
+  },
+
+  getAllOptimizedResumes: () => {
+    return Array.from(optimizedResumes.values());
+  },
+
+  generatePDFResume: async (resumeData) => {
+    try {
+      // Use LaTeX template service for professional PDF generation
+      const resumeText =
+        typeof resumeData === "string"
+          ? resumeData
+          : resumeData?.text ||
+            resumeData?.content ||
+            JSON.stringify(resumeData);
+
+      const result = await latexService.processResume(resumeText);
+      return result.pdf;
+    } catch (error) {
+      console.error("Error generating PDF resume:", error);
+      throw new Error("Failed to generate PDF resume");
+    }
+  },
+
+  generateDOCXResume: async (resumeData) => {
+    try {
+      // Use LaTeX template service for professional DOCX generation
+      const resumeText =
+        typeof resumeData === "string"
+          ? resumeData
+          : resumeData?.text ||
+            resumeData?.content ||
+            JSON.stringify(resumeData);
+
+      const result = await latexService.processResume(resumeText);
+      return result.docx;
+    } catch (error) {
+      console.error("Error generating DOCX resume:", error);
+      throw new Error("Failed to generate DOCX resume");
+    }
+  },
+
+  // Add method to get HTML preview for frontend
+  generateHTMLPreview: async (resumeData) => {
+    try {
+      // Use LaTeX template service for HTML preview generation
+      const resumeText =
+        typeof resumeData === "string"
+          ? resumeData
+          : resumeData?.text ||
+            resumeData?.content ||
+            JSON.stringify(resumeData);
+
+      const result = await latexService.processResume(resumeText);
+      return result.html;
+    } catch (error) {
+      console.error("Error generating HTML preview:", error);
+      throw new Error("Failed to generate HTML preview");
+    }
+  },
+
+  // Add method to get structured data for frontend
+  getStructuredResumeData: async (resumeData) => {
+    try {
+      const resumeText =
+        typeof resumeData === "string"
+          ? resumeData
+          : resumeData?.text ||
+            resumeData?.content ||
+            JSON.stringify(resumeData);
+
+      const structuredData = latexService.parseResumeText(resumeText);
+      return structuredData;
+    } catch (error) {
+      console.error("Error parsing structured resume data:", error);
+      throw new Error("Failed to parse structured resume data");
+    }
+  },
+};

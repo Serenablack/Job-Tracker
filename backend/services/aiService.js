@@ -4,24 +4,9 @@ import { cleanAndParseJSON } from "../utils/fileUtils.js";
 import defaultJobData from "../DefaultData.js";
 import { Ollama } from "ollama";
 
-// Initialize AI services with fallback models
+// Initialize AI services
 const genAI = new GoogleGenerativeAI(APP_CONFIG.AI.API_KEY);
-
-// Try multiple model names as fallbacks
-const getModel = () => {
-  const modelNames = [
-    APP_CONFIG.AI.MODEL,
-    "gemini-1.5-flash-002",
-    "gemini-1.5-flash-001", 
-    "gemini-1.5-flash",
-    "gemini-pro"
-  ];
-  
-  // For now, just use the first one, but we could implement retry logic
-  return genAI.getGenerativeModel({ model: modelNames[0] });
-};
-
-const model = getModel();
+const model = genAI.getGenerativeModel({ model: APP_CONFIG.AI.MODEL });
 const ollama = new Ollama();
 
 export const AIService = {
@@ -83,48 +68,13 @@ ${jobDescription}
 
 JSON Response:`;
 
-      // Try with current model first
-      let result, response, extracted;
-      
-      try {
-        result = await model.generateContent(prompt);
-        response = await result.response;
-        extracted = response.text();
-      } catch (modelError) {
-        console.error("Primary model failed, trying fallback models:", modelError.message);
-        
-        // Try fallback models
-        const fallbackModels = ["gemini-1.5-flash-001", "gemini-pro"];
-        
-        for (const fallbackModelName of fallbackModels) {
-          try {
-            console.log(`Trying fallback model: ${fallbackModelName}`);
-            const fallbackModel = genAI.getGenerativeModel({ model: fallbackModelName });
-            result = await fallbackModel.generateContent(prompt);
-            response = await result.response;
-            extracted = response.text();
-            console.log(`Success with fallback model: ${fallbackModelName}`);
-            break;
-          } catch (fallbackError) {
-            console.error(`Fallback model ${fallbackModelName} failed:`, fallbackError.message);
-            continue;
-          }
-        }
-        
-        if (!extracted) {
-          throw new Error("All Gemini models failed. Please check your API key and model availability.");
-        }
-      }
+      const result = await model.generateContent(prompt);
+      const response = await result.response;
+      let extracted = response.text();
 
       return cleanAndParseJSON(extracted);
     } catch (error) {
       console.error("GeminiAI extraction failed:", error);
-      
-      // Return a more helpful error message
-      if (error.message.includes("404 Not Found") && error.message.includes("models/")) {
-        throw new Error("Gemini model not found. Please check if the model name is correct and available in your region.");
-      }
-      
       throw error;
     }
   },

@@ -1,296 +1,394 @@
+// Local imports
 import { AIService } from "../services/aiService.js";
 import { ResumeService } from "../services/resumeService.js";
 import { GoogleSheetsService } from "../services/googleSheetsService.js";
-
 import { extractTextFromFile, validateFileUpload } from "../utils/fileUtils.js";
 
-const aiService = new AIService();
-const resumeService = new ResumeService();
+const aiService = AIService;
+const resumeService = ResumeService;
 
-export class ResumeController {
-  static async uploadResume(req, res) {
+export const ResumeController = {
+  /**
+   * Upload and analyze resume with job description
+   * @param {Object} req - Express request object
+   * @param {Object} res - Express response object
+   */
+  uploadResume: async (req, res) => {
     try {
       const file = req.file;
       const jobDescription = req.body.jobDescription;
 
       if (!file) {
-        return res.status(400).json({ error: "Resume file is required." });
+        return res.status(400).json({
+          success: false,
+          data: "Resume file is required",
+        });
       }
 
       if (!jobDescription || !jobDescription.trim()) {
-        return res.status(400).json({ error: "Job description is required." });
+        return res.status(400).json({
+          success: false,
+          data: "Job description is required",
+        });
       }
 
       validateFileUpload(file);
       const resumeText = await extractTextFromFile(file.path, file.mimetype);
 
-      const resumeId = resumeService.storeResume(file.originalname, resumeText);
-
-      const analysisResult = await resumeService.analyzeResumeWithJob(
+      // Analyze resume with job description using AI
+      const analysisResult = await AIService.compareResumeWithJob(
         resumeText,
         jobDescription
       );
 
-      res.json({
+      // Check if analysis failed
+      if (analysisResult.error) {
+        return res.status(400).json({
+          success: false,
+          data: analysisResult.error,
+        });
+      }
+
+      const resumeId = resumeService.storeResume(file.originalname, resumeText);
+
+      const responseData = {
         analysisResult,
         resumeText,
         resumeInfo: {
           fileName: file.originalname,
           resumeId: resumeId,
           wordCount: resumeText.split(/\s+/).length,
+          validationDetails: analysisResult.resumeValidation || null,
         },
+      };
+
+      return res.status(201).json({
+        success: true,
+        data: responseData,
       });
     } catch (error) {
       console.error("Error uploading/analyzing resume:", error);
-      res.status(500).json({ error: "Failed to upload and analyze resume" });
+      return res.status(400).json({
+        success: false,
+        data: error.message || "File upload failed",
+      });
     }
-  }
+  },
 
-  static async generateATSResume(req, res) {
+  /**
+   * Upload resume without analysis
+   * @param {Object} req - Express request object
+   * @param {Object} res - Express response object
+   */
+  uploadResumeOnly: async (req, res) => {
     try {
-      const {
-        resumeText,
-        resumeFileName,
-        jobDescription,
-        comparisonResult,
-        geminiPrompt,
-      } = req.body;
+      const file = req.file;
+
+      if (!file) {
+        return res.status(400).json({
+          success: false,
+          data: "Resume file is required",
+        });
+      }
+
+      validateFileUpload(file);
+      const resumeText = await extractTextFromFile(file.path, file.mimetype);
+      const resumeId = resumeService.storeResume(file.originalname, resumeText);
+
+      const responseData = {
+        resumeId: resumeId,
+        resumeInfo: {
+          fileName: file.originalname,
+          resumeId: resumeId,
+          wordCount: resumeText.split(/\s+/).length,
+        },
+      };
+
+      return res.status(201).json({
+        success: true,
+        data: responseData,
+        message: "Resume uploaded successfully",
+      });
+    } catch (error) {
+      console.error("Error uploading resume:", error);
+      return res.status(400).json({
+        success: false,
+        data: error.message || "File upload failed",
+      });
+    }
+  },
+
+  /**
+   * Analyze uploaded resume
+   * @param {Object} req - Express request object
+   * @param {Object} res - Express response object
+   */
+  analyzeResume: async (req, res) => {
+    try {
+      const { resumeId, jobDescription } = req.body;
+
+      if (!resumeId || !jobDescription) {
+        return res.status(400).json({
+          success: false,
+          data: "Resume ID and job description are required",
+        });
+      }
+
+      const resume = resumeService.getResumeByFileName(resumeId);
+      if (!resume) {
+        return res.status(404).json({
+          success: false,
+          data: "Resume not found",
+        });
+      }
+
+      const analysisResult = await resumeService.analyzeResumeWithJob(
+        resume.text,
+        jobDescription
+      );
+
+      if (analysisResult.error) {
+        return res.status(400).json({
+          success: false,
+          data: analysisResult.error,
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          analysisResult,
+          resumeText: resume.text,
+        },
+        message: "Resume analyzed successfully",
+      });
+    } catch (error) {
+      console.error("Error analyzing resume:", error);
+      return res.status(500).json({
+        success: false,
+        data: error.message || "Resume analysis failed",
+      });
+    }
+  },
+
+  /**
+   * Generate ATS-optimized resume
+   * @param {Object} req - Express request object
+   * @param {Object} res - Express response object
+   */
+  generateATSResume: async (req, res) => {
+    try {
+      const { resumeText, jobDescription, comparisonResult, resumeFileName } =
+        req.body;
+
       if (!resumeText || !jobDescription || !comparisonResult) {
         return res.status(400).json({
-          error:
-            "Missing required parameters: resumeText, jobDescription, and comparisonResult are required",
+          success: false,
+          data: "Missing required parameters: resumeText, jobDescription, and comparisonResult are required",
         });
       }
 
       if (jobDescription.trim().length < 50) {
         return res.status(400).json({
-          error:
-            "Job description too short. Please provide a detailed job description with at least 50 characters.",
+          success: false,
+          data: "Job description too short. Please provide a detailed job description with at least 50 characters.",
         });
       }
 
-      if (
-        !comparisonResult.missingSkills ||
-        !comparisonResult.matchedSkills ||
-        typeof comparisonResult.matchPercentage !== "number"
-      ) {
-        return res.status(400).json({
-          error:
-            "Invalid comparison result structure. Please ensure it contains missingSkills, matchedSkills, and matchPercentage.",
-        });
-      }
-
-      const optimizationResult = await aiService.generateATSResume(
+      // Generate optimized resume text using AI
+      const optimizedResumeText = await aiService.generateATSResume(
         resumeText,
         jobDescription,
         comparisonResult
       );
 
-      if (
-        !optimizationResult.optimizedResume ||
-        optimizationResult.optimizedResume.trim().length < 200
-      ) {
-        throw new Error("Generated resume is too short or empty");
+      // Store the optimized resume for later use
+      if (resumeFileName) {
+        resumeService.storeOptimizedResume(resumeFileName, optimizedResumeText);
       }
 
-      const missingSkills = comparisonResult.missingSkills || [];
-      const incorporatedSkills = missingSkills.filter((skill) =>
-        optimizationResult.optimizedResume
-          .toLowerCase()
-          .includes(skill.toLowerCase())
-      );
-
-      const incorporationRate =
-        missingSkills.length > 0
-          ? Math.round((incorporatedSkills.length / missingSkills.length) * 100)
-          : 100;
-
-      const optimizedResumeId = resumeService.storeOptimizedResume(
-        resumeFileName || `optimized_${Date.now()}`,
-        optimizationResult.optimizedResume
-      );
-
-      const response = {
+      return res.status(200).json({
         success: true,
-        optimizedResumeId,
-        optimizedResume: optimizationResult.optimizedResume,
-        message:
-          "ATS-optimized resume generated successfully using professional recruiter approach",
-        analysis: {
-          originalMatch: comparisonResult.matchPercentage,
-          atsTarget: "95%+ Compatibility",
-          estimatedNewMatch: optimizationResult.validation?.overallScore || 0,
-          missingSkillsCount: missingSkills.length,
-          incorporatedSkillsCount: incorporatedSkills.length,
-          incorporationRate: incorporationRate,
-          incorporatedSkills: incorporatedSkills,
-          remainingMissingSkills:
-            optimizationResult.validation?.missingSkills || [],
-          atsCompatible: optimizationResult.validation?.atsCompatible || false,
-          withinTolerance:
-            optimizationResult.validation?.toleranceCheck || false,
+        data: {
+          optimizedResume: optimizedResumeText,
+          message: "ATS-optimized resume generated successfully",
+          improvements:
+            comparisonResult.recommendations ||
+            comparisonResult.suggestions ||
+            [],
         },
-        optimization: {
-          resumeLength: optimizationResult.optimizedResume.length,
-          keywordDensity: ResumeController.calculateKeywordDensity(
-            optimizationResult.optimizedResume,
-            [...missingSkills, ...comparisonResult.matchedSkills]
-          ),
-          atsScore: ResumeController.calculateATSScore(
-            optimizationResult.optimizedResume,
-            jobDescription
-          ),
-          integrationStrategy:
-            optimizationResult.processingDetails?.integrationStrategy ||
-            "Professional Recruiter Approach",
-        },
-        validation: optimizationResult.validation || null,
-      };
-
-      if (optimizationResult.validation?.atsCompatible) {
-        response.status = "EXCELLENT";
-        response.message = "ATS resume achieved 95%+ compatibility target";
-      } else if (optimizationResult.validation?.toleranceCheck) {
-        response.status = "GOOD";
-        response.message =
-          "ATS resume within acceptable tolerance (1-2 missing keywords)";
-      } else {
-        response.status = "NEEDS_IMPROVEMENT";
-        response.warning = `Resume may need further optimization. ${
-          optimizationResult.validation?.stillMissingSkills || 0
-        } skills still missing.`;
-      }
-
-      res.json(response);
+      });
     } catch (error) {
       console.error("Error generating ATS resume:", error);
-      res.status(500).json({
-        error: "Failed to generate ATS resume",
-        details: error.message,
-        timestamp: new Date().toISOString(),
+      return res.status(500).json({
+        success: false,
+        data: error.message || "Failed to generate ATS resume",
       });
     }
-  }
+  },
 
-  static async downloadATSResume(req, res) {
+  /**
+   * Download resume (POST method for frontend compatibility)
+   * @param {Object} req - Express request object
+   * @param {Object} res - Express response object
+   */
+  downloadResumePost: async (req, res) => {
     try {
-      const {
-        optimizedResumeText,
-        originalFileName,
-        templateType = "clean",
-        jobData,
-      } = req.body;
+      const { resumeData, format = "pdf" } = req.body;
 
-      if (!optimizedResumeText) {
+      if (!resumeData) {
         return res.status(400).json({
-          error: "Missing required parameter: optimizedResumeText is required",
+          success: false,
+          data: "Resume data is required",
         });
       }
 
-      const result = await resumeService.generateEnhancedPDF(
-        optimizedResumeText,
-        templateType,
-        jobData
-      );
+      let fileBuffer;
+      let contentType;
+      let filename;
 
-      res.setHeader("Content-Type", "application/pdf");
+      if (format.toLowerCase() === "docx") {
+        fileBuffer = await resumeService.generateDOCXResume(resumeData);
+        contentType =
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+        filename = `ATS_Resume_${Date.now()}.docx`;
+      } else {
+        fileBuffer = await resumeService.generatePDFResume(resumeData);
+        contentType = "application/pdf";
+        filename = `ATS_Resume_${Date.now()}.pdf`;
+      }
+
+      res.setHeader("Content-Type", contentType);
       res.setHeader(
         "Content-Disposition",
-        `attachment; filename="${result.fileName}"`
+        `attachment; filename="${filename}"`
       );
+      res.setHeader("Content-Length", fileBuffer.length);
 
-      res.send(result.buffer);
+      return res.send(fileBuffer);
     } catch (error) {
-      console.error("Error downloading ATS resume:", error);
-      res.status(500).json({ error: "Failed to download resume" });
+      console.error("Error downloading resume:", error);
+      return res.status(500).json({
+        success: false,
+        data: error.message || "Failed to download resume",
+      });
     }
-  }
+  },
 
-  static async getAvailableTemplates(req, res) {
+  /**
+   * Download generated resume
+   * @param {Object} req - Express request object
+   * @param {Object} res - Express response object
+   */
+  downloadResume: async (req, res) => {
     try {
-      const templates = resumeService.getAvailableTemplates();
-      res.json({
+      const { resumeId, format = "pdf" } = req.params;
+
+      if (!resumeId) {
+        return res.status(400).json({
+          success: false,
+          data: "Resume ID is required",
+        });
+      }
+
+      const optimizedResume = resumeService.getOptimizedResume(resumeId);
+      if (!optimizedResume) {
+        return res.status(404).json({
+          success: false,
+          data: "Optimized resume not found",
+        });
+      }
+
+      let fileBuffer;
+      let contentType;
+      let filename;
+
+      if (format.toLowerCase() === "docx") {
+        fileBuffer = await resumeService.generateDOCXResume(optimizedResume);
+        contentType =
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+        filename = `ATS_Resume_${resumeId}.docx`;
+      } else {
+        fileBuffer = await resumeService.generatePDFResume(optimizedResume);
+        contentType = "application/pdf";
+        filename = `ATS_Resume_${resumeId}.pdf`;
+      }
+
+      res.setHeader("Content-Type", contentType);
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${filename}"`
+      );
+      res.setHeader("Content-Length", fileBuffer.length);
+
+      return res.send(fileBuffer);
+    } catch (error) {
+      console.error("Error downloading resume:", error);
+      return res.status(500).json({
+        success: false,
+        data: error.message || "Failed to download resume",
+      });
+    }
+  },
+
+  /**
+   * Get resume analysis history
+   * @param {Object} req - Express request object
+   * @param {Object} res - Express response object
+   */
+  getResumeHistory: async (req, res) => {
+    try {
+      const resumes = resumeService.getAllResumes();
+      const optimizedResumes = resumeService.getAllOptimizedResumes();
+
+      const history = resumes.map((resume) => {
+        const optimized = optimizedResumes.find(
+          (opt) => opt.originalResumeId === resume.id
+        );
+        return {
+          id: resume.id,
+          fileName: resume.fileName,
+          uploadDate: resume.uploadDate,
+          hasOptimizedVersion: !!optimized,
+          optimizedResumeId: optimized?.id || null,
+        };
+      });
+
+      return res.status(200).json({
         success: true,
-        templates: templates,
+        data: history,
       });
     } catch (error) {
-      console.error("Error getting available templates:", error);
-      res.status(500).json({ error: "Failed to get available templates" });
-    }
-  }
-
-  static async downloadResumeWithTemplate(req, res) {
-    try {
-      const {
-        resumeText,
-        templateType = "clean",
-        jobData,
-        filename,
-      } = req.body;
-
-      if (!resumeText) {
-        return res.status(400).json({
-          error: "Missing required parameter: resumeText is required",
-        });
-      }
-
-      const result = await resumeService.generateProfessionalResume(
-        resumeText,
-        templateType,
-        jobData
-      );
-
-      res.setHeader("Content-Type", "application/pdf");
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename="${filename || result.fileName}"`
-      );
-
-      res.send(result.buffer);
-    } catch (error) {
-      console.error("Error downloading resume with template:", error);
-      res.status(500).json({
-        error: "Failed to download resume with template",
-        details: error.message,
+      console.error("Error getting resume history:", error);
+      return res.status(500).json({
+        success: false,
+        data: error.message || "Failed to get resume history",
       });
     }
-  }
+  },
 
-  static async generateDOCXResume(req, res) {
+  /**
+   * Save resume to Google Drive
+   * @param {Object} req - Express request object
+   * @param {Object} res - Express response object
+   */
+  saveResumeToGoogleDrive: async (req, res) => {
     try {
-      const { resumeData } = req.body;
-      const buffer = await resumeService.generateDOCXResume(resumeData);
-
-      res.setHeader(
-        "Content-Type",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-      );
-      res.setHeader(
-        "Content-Disposition",
-        "attachment; filename=ATS_Resume.docx"
-      );
-      res.send(buffer);
-    } catch (error) {
-      console.error("Error generating DOCX:", error);
-      res.status(500).json({
-        error: "Failed to generate document",
-        details: error.message,
-      });
-    }
-  }
-
-  static async saveResumeToGoogleDrive(req, res) {
-    try {
-      const { resumeText, filename, googleToken } = req.body;
+      const { resumeText, filename, googleToken, format = "docx" } = req.body;
 
       if (!resumeText || !filename || !googleToken) {
         return res.status(400).json({
-          error:
-            "Missing required parameters: resumeText, filename, and googleToken are required",
+          success: false,
+          data: "Missing required parameters: resumeText, filename, and googleToken are required",
         });
       }
 
-      const buffer = await resumeService.generateDOCXResume(resumeText);
+      let buffer;
+      if (format.toLowerCase() === "pdf") {
+        buffer = await resumeService.generatePDFResume(resumeText);
+      } else {
+        buffer = await resumeService.generateDOCXResume(resumeText);
+      }
 
       const googleSheetsService = new GoogleSheetsService();
       const result = await googleSheetsService.saveResumeToGoogleDrive(
@@ -301,97 +399,122 @@ export class ResumeController {
 
       res.json({
         success: true,
-        ...result,
+        data: {
+          fileId: result.fileId,
+          fileUrl: result.fileUrl,
+        },
         message: "Resume saved to Google Drive successfully!",
       });
     } catch (error) {
       console.error("Error saving resume to Google Drive:", error);
       res.status(500).json({
-        error: "Failed to save resume to Google Drive",
-        details: error.message,
-        timestamp: new Date().toISOString(),
+        success: false,
+        data: "Failed to save resume to Google Drive",
+        message: error.message,
       });
     }
-  }
+  },
 
-  static async cleanupTemporaryResume(req, res) {
+  /**
+   * Cleanup temporary resume
+   * @param {Object} req - Express request object
+   * @param {Object} res - Express response object
+   */
+  cleanupTemporaryResume: async (req, res) => {
     try {
       const { resumeId, resumeFileName } = req.body;
 
-      let cleaned = false;
-
-      if (resumeId) {
-        cleaned = resumeService.deleteResume(resumeId);
-      } else if (resumeFileName) {
-        cleaned = resumeService.deleteResumeByFileName(resumeFileName);
-      }
-
-      if (cleaned) {
-        res.json({
-          success: true,
-          message: "Temporary resume storage cleaned up successfully",
-        });
-      } else {
-        res.status(404).json({
-          error: "Resume not found in temporary storage",
+      if (!resumeId) {
+        return res.status(400).json({
+          success: false,
+          data: "Resume ID is required",
         });
       }
+
+      // Clean up from storage
+      resumeService.deleteResume(resumeId);
+
+      return res.status(200).json({
+        success: true,
+        data: { cleaned: true },
+        message: "Temporary resume cleaned up successfully",
+      });
     } catch (error) {
       console.error("Error cleaning up temporary resume:", error);
-      res.status(500).json({
-        error: "Failed to clean up temporary resume storage",
-        details: error.message,
-        timestamp: new Date().toISOString(),
+      return res.status(500).json({
+        success: false,
+        data: error.message || "Failed to cleanup temporary resume",
       });
     }
-  }
+  },
 
-  static async generateFormattedResumeTemplate(req, res) {
+  /**
+   * Generate HTML preview of resume using LaTeX template
+   * @param {Object} req - Express request object
+   * @param {Object} res - Express response object
+   */
+  generateHTMLPreview: async (req, res) => {
     try {
-      const {
-        resumeText,
-        jobDescription,
-        comparisonResult,
-        format = "markdown",
-      } = req.body;
+      const { resumeData } = req.body;
 
-      if (!resumeText) {
+      if (!resumeData) {
         return res.status(400).json({
-          error: "Missing required parameter: resumeText is required",
+          success: false,
+          data: "Resume data is required",
         });
       }
 
-      if (!jobDescription) {
-        return res.status(400).json({
-          error: "Missing required parameter: jobDescription is required",
-        });
-      }
+      const htmlContent = await resumeService.generateHTMLPreview(resumeData);
 
-      if (!comparisonResult) {
-        return res.status(400).json({
-          error: "Missing required parameter: comparisonResult is required",
-        });
-      }
-
-      const result = await aiService.generateFormattedResumeTemplate(
-        resumeText,
-        jobDescription,
-        comparisonResult,
-        format
-      );
-
-      res.json({
+      return res.status(200).json({
         success: true,
-        formattedResume: result.formattedResume,
-        format: result.format,
-        message: result.message,
+        data: {
+          html: htmlContent,
+        },
+        message: "HTML preview generated successfully",
       });
     } catch (error) {
-      console.error("Error generating formatted resume template:", error);
-      res.status(500).json({
-        error: "Failed to generate formatted resume template",
-        details: error.message,
+      console.error("Error generating HTML preview:", error);
+      return res.status(500).json({
+        success: false,
+        data: error.message || "Failed to generate HTML preview",
       });
     }
-  }
-}
+  },
+
+  /**
+   * Get structured resume data using LaTeX parser
+   * @param {Object} req - Express request object
+   * @param {Object} res - Express response object
+   */
+  getStructuredResumeData: async (req, res) => {
+    try {
+      const { resumeData } = req.body;
+
+      if (!resumeData) {
+        return res.status(400).json({
+          success: false,
+          data: "Resume data is required",
+        });
+      }
+
+      const structuredData = await resumeService.getStructuredResumeData(
+        resumeData
+      );
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          structuredData,
+        },
+        message: "Structured resume data parsed successfully",
+      });
+    } catch (error) {
+      console.error("Error parsing structured resume data:", error);
+      return res.status(500).json({
+        success: false,
+        data: error.message || "Failed to parse structured resume data",
+      });
+    }
+  },
+};
