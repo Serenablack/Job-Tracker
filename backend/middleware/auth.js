@@ -64,11 +64,6 @@ export const verifyJWTToken = (req, res, next) => {
       });
     }
 
-    // For now, we'll accept any non-empty token as valid
-    // In a real implementation, you would verify the JWT signature
-    // const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-    // Store user info in request
     req.user = { token };
     next();
   } catch (error) {
@@ -77,24 +72,5 @@ export const verifyJWTToken = (req, res, next) => {
       error: "Invalid JWT token",
       details: error.message,
     });
-  }
-};
-
-// Optional authentication middleware
-export const optionalAuth = (req, res, next) => {
-  try {
-    const authHeader = req.headers.authorization;
-
-    if (authHeader && authHeader.startsWith("Bearer ")) {
-      const token = authHeader.replace("Bearer ", "");
-      if (token && token.trim() !== "") {
-        req.userToken = token;
-      }
-    }
-
-    next();
-  } catch (error) {
-    console.error("Error in optionalAuth middleware:", error);
-    next(); // Continue even if there's an error in optional auth
   }
 };

@@ -1,25 +1,49 @@
+// Node.js built-ins
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+
+// Third-party packages
 import mammoth from "mammoth";
 import pdf from "pdf-parse";
+
+// Local imports
+import { APP_CONFIG } from "../config/config.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-export function getRootPath() {
+/**
+ * Gets the root path of the application
+ * @returns {string} Root path
+ */
+export const getRootPath = () => {
   return path.join(__dirname, "..");
-}
+};
 
-export function getAssetsPath() {
+/**
+ * Gets the assets directory path
+ * @returns {string} Assets path
+ */
+export const getAssetsPath = () => {
   return path.join(getRootPath(), "assets");
-}
+};
 
-export function getJobsFilePath() {
+/**
+ * Gets the jobs file path
+ * @returns {string} Jobs file path
+ */
+export const getJobsFilePath = () => {
   return path.join(getAssetsPath(), "Jobs_applied.xlsx");
-}
+};
 
-export async function extractTextFromFile(filePath, mimeType) {
+/**
+ * Extracts text content from various file types
+ * @param {string} filePath - Path to the file
+ * @param {string} mimeType - MIME type of the file
+ * @returns {Promise<string>} Extracted text content
+ */
+export const extractTextFromFile = async (filePath, mimeType) => {
   try {
     if (mimeType === "application/pdf") {
       const dataBuffer = fs.readFileSync(filePath);
@@ -40,9 +64,14 @@ export async function extractTextFromFile(filePath, mimeType) {
     console.error("Error extracting text from file:", error);
     throw error;
   }
-}
+};
 
-export function cleanAndParseJSON(text) {
+/**
+ * Cleans and parses JSON from text response
+ * @param {string} text - Text containing JSON
+ * @returns {Object} Parsed JSON object
+ */
+export const cleanAndParseJSON = (text) => {
   try {
     const cleanedText = text
       .replace(/^[^{]*/g, "")
@@ -61,27 +90,30 @@ export function cleanAndParseJSON(text) {
     }
     throw new Error("No valid JSON found in response");
   }
-}
+};
 
-export function validateFileUpload(file) {
+/**
+ * Validates file upload based on configuration
+ * @param {Object} file - Uploaded file object
+ * @throws {Error} If file validation fails
+ */
+export const validateFileUpload = (file) => {
   if (!file) {
     throw new Error("No file uploaded");
   }
 
-  const allowedMimeTypes = [
-    "application/pdf",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "text/plain",
-  ];
+  const { ALLOWED_MIME_TYPES, MAX_FILE_SIZE } = APP_CONFIG.UPLOAD;
 
-  if (!allowedMimeTypes.includes(file.mimetype)) {
+  if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
     throw new Error(
-      "Invalid file type. Only PDF, DOCX, and TXT files are allowed."
+      `Invalid file type. Only ${ALLOWED_MIME_TYPES.join(
+        ", "
+      )} files are allowed.`
     );
   }
 
-  const maxSize = 5 * 1024 * 1024;
-  if (file.size > maxSize) {
-    throw new Error("File size too large. Maximum 5MB allowed.");
+  if (file.size > MAX_FILE_SIZE) {
+    const maxSizeMB = MAX_FILE_SIZE / (1024 * 1024);
+    throw new Error(`File size too large. Maximum ${maxSizeMB}MB allowed.`);
   }
-}
+};
