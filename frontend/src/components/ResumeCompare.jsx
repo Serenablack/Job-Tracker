@@ -2,7 +2,6 @@ import React, { useState, useCallback } from "react";
 import {
   Box,
   Typography,
-  Card,
   Stepper,
   Step,
   StepLabel,
@@ -11,7 +10,6 @@ import {
   DialogContent,
   DialogContentText,
   DialogActions,
-  CardContent,
   Tooltip,
   IconButton,
   Paper,
@@ -22,7 +20,6 @@ import {
   Refresh as RefreshIcon,
   UploadFile as UploadFileIcon,
   Assessment as AssessmentIcon,
-  AutoAwesome as AutoAwesomeIcon,
   Download as DownloadIcon,
 } from "@mui/icons-material";
 import ResumeGeneratePage from "./resume/ResumeGeneratePage";
@@ -30,9 +27,9 @@ import ResumeAnalysisPage from "./resume/ResumeAnalysisPage";
 import ResumeUploadPage from "./resume/ResumeUploadPage";
 import ResumeDownloadPage from "./resume/ResumeDownloadPage";
 import { useSnackbar } from "../contexts/SnackbarContext.jsx";
+import { useLoading } from "../contexts/LoadingContext.jsx";
 import {
   downloadResume,
-  downloadResumePDF,
   generateResume,
   saveResumeToGoogleDrive,
   cleanupTemporaryResume,
@@ -41,30 +38,36 @@ import { createFormDataHeaders } from "../utils/authUtils.js";
 import Loading from "./Loading.jsx";
 import { PrimaryButton, SecondaryButton } from "./common";
 import { useAuth } from "../contexts/AuthContext.jsx";
+import { API_CONFIG } from "../constants/constants.js";
 
-export const API_BASE_URL = "http://localhost:5000/api/v1";
+const API_BASE_URL = API_CONFIG.BASE_URL;
 
 const ResumeCompare = ({ jobDescription, jobData, onBack }) => {
   const { showSnackbar } = useSnackbar();
+  const {
+    loading,
+    loadingVariant,
+    startResumeAnalysis,
+    startResumeGeneration,
+    startFileDownload,
+    stopLoading,
+  } = useLoading();
   const { googleToken } = useAuth();
   const [currentPage, setCurrentPage] = useState(0);
   const [selectedFile, setSelectedFile] = useState(null);
   const [resumeText, setResumeText] = useState(null);
   const [comparisonResult, setComparisonResult] = useState(null);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [isResumeGenerating, setIsResumeGenerating] = useState(false);
   const [showDriveDialog, setShowDriveDialog] = useState(false);
   const [downloadedFileName, setDownloadedFileName] = useState("");
 
   const steps = [
-    { label: "Upload Resume", icon: UploadFileIcon },
-    { label: "Analysis", icon: AssessmentIcon },
-    { label: "Generate", icon: AutoAwesomeIcon },
-    { label: "Download", icon: DownloadIcon },
+    { label: "Upload & Analyze", icon: UploadFileIcon },
+    { label: "Review & Generate", icon: AssessmentIcon },
+    { label: "Download & Save", icon: DownloadIcon },
   ];
 
   const generateFileName = useCallback(
-    (extension, templateType = "clean", jobDataOverride = null) => {
+    (extension, jobDataOverride = null) => {
       const today = new Date();
       const dateStr = today.toISOString().split("T")[0];
       const currentJobData = jobDataOverride || jobData;
@@ -77,25 +80,37 @@ const ResumeCompare = ({ jobDescription, jobData, onBack }) => {
         .replace(/[^a-zA-Z0-9\s]/g, "")
         .replace(/\s+/g, "_")
         .substring(0, 20);
-      const templateName = templateType
-        .split("-")
-        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-        .join("");
-      return `${cleanCompanyName}_${templateName}_Resume_${dateStr}.${extension}`;
+      return `${cleanCompanyName}_Resume_${dateStr}.${extension}`;
     },
-    [jobData, selectedFile]
+    [jobData]
   );
 
-  const handleFileSelect = useCallback((file) => {
-    setSelectedFile(file);
-    setComparisonResult(null);
-    setResumeText(null);
-    setCurrentPage(0);
-  }, []);
+  const handleFileSelect = useCallback(
+    (file) => {
+      setSelectedFile(file);
+      setComparisonResult(null);
+      setResumeText(null);
+      setCurrentPage(0);
+    },
+    [setSelectedFile, setCurrentPage, setComparisonResult, setResumeText]
+  );
 
   const handleSendForComparison = useCallback(async () => {
     if (!selectedFile) return;
-    setIsAnalyzing(true);
+
+    // Guard: require job description
+    if (!jobDescription || !jobDescription.trim()) {
+      showSnackbar("Job description is required", "warning");
+      return;
+    }
+
+    // Guard: require auth token
+    if (!googleToken) {
+      showSnackbar("Please login to analyze your resume.", "warning");
+      return;
+    }
+
+    startResumeAnalysis();
     showSnackbar("Uploading and analyzing resume...", "info");
     try {
       const formData = new FormData();
@@ -109,29 +124,58 @@ const ResumeCompare = ({ jobDescription, jobData, onBack }) => {
       });
 
       if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(
-          errorData.error || "Failed to upload and analyze resume"
-        );
+        let errorMessage = "Upload/analysis failed";
+        try {
+          const contentType = res.headers.get("content-type") || "";
+          if (contentType.includes("application/json")) {
+            const errorData = await res.json();
+            errorMessage =
+              errorData.error?.message ||
+              errorData.error ||
+              errorData.message ||
+              errorMessage;
+          } else {
+            const text = await res.text();
+            errorMessage = text?.slice(0, 500) || errorMessage;
+          }
+        } catch {
+          // noop - could not parse error response
+        }
+        throw new Error(errorMessage);
       }
 
       const data = await res.json();
-      if (!data || !data.analysisResult) {
+      if (!data || !data.data?.analysisResult) {
         throw new Error("Invalid response from server");
       }
 
-      setComparisonResult(data.analysisResult);
-      setResumeText(data.resumeText);
+      setComparisonResult(data.data.analysisResult);
+      setResumeText(data.data.resumeText);
       showSnackbar("Resume uploaded and analyzed successfully!", "success");
       setCurrentPage(1);
     } catch (error) {
-      showSnackbar(`Upload/analysis failed: ${error.message}`, "error");
-      setSelectedFile(null);
+      console.error("Upload/analysis error:", error);
+      const message = (error?.message || "Upload/analysis failed").slice(
+        0,
+        300
+      );
+      showSnackbar(`Upload/analysis failed: ${message}`, "error");
+      // Keep selectedFile so user can retry
       setResumeText(null);
     } finally {
-      setIsAnalyzing(false);
+      stopLoading();
     }
-  }, [selectedFile, jobDescription, showSnackbar]);
+  }, [
+    selectedFile,
+    jobDescription,
+    googleToken,
+    showSnackbar,
+    setComparisonResult,
+    setResumeText,
+    setCurrentPage,
+    startResumeAnalysis,
+    stopLoading,
+  ]);
 
   const handleGenerateResume = useCallback(async () => {
     if (!selectedFile) {
@@ -157,7 +201,7 @@ const ResumeCompare = ({ jobDescription, jobData, onBack }) => {
       return;
     }
 
-    setIsResumeGenerating(true);
+    startResumeGeneration();
     showSnackbar("Generating ATS-optimized resume...", "info");
 
     try {
@@ -167,12 +211,26 @@ const ResumeCompare = ({ jobDescription, jobData, onBack }) => {
         comparisonResult,
         selectedFile.name
       );
-      const optimizedResumeText =
-        result.optimizedResume || result.optimizedResumeText;
 
-      if (!optimizedResumeText) {
-        console.error("No optimized resume text in result:", result);
-        throw new Error("No optimized resume text received from server");
+      // Handle different possible response structures
+      const optimizedResumeText = result?.optimizedResume?.optimizedResume;
+
+      if (
+        !optimizedResumeText ||
+        typeof optimizedResumeText !== "string" ||
+        optimizedResumeText.trim() === ""
+      ) {
+        console.error("No valid optimized resume text in result:", result);
+        throw new Error("No valid optimized resume text received from server");
+      }
+
+      if (result?.improvements) {
+        const improvements = result?.improvements;
+        setComparisonResult((prev) => ({
+          ...prev,
+          improvements: improvements,
+          recommendations: improvements,
+        }));
       }
 
       setResumeText(optimizedResumeText);
@@ -182,7 +240,7 @@ const ResumeCompare = ({ jobDescription, jobData, onBack }) => {
       console.error("Resume generation error:", error);
       showSnackbar(error.message || "Failed to generate resume.", "error");
     } finally {
-      setIsResumeGenerating(false);
+      stopLoading();
     }
   }, [
     selectedFile,
@@ -190,6 +248,10 @@ const ResumeCompare = ({ jobDescription, jobData, onBack }) => {
     comparisonResult,
     resumeText,
     showSnackbar,
+    setResumeText,
+    setCurrentPage,
+    startResumeGeneration,
+    stopLoading,
   ]);
 
   const handleCleanupOnly = useCallback(async () => {
@@ -204,24 +266,25 @@ const ResumeCompare = ({ jobDescription, jobData, onBack }) => {
   }, [selectedFile, showSnackbar]);
 
   const handleDownloadDocx = useCallback(
-    async (templateType = "clean", jobData = null) => {
+    async (jobData = null) => {
       if (!resumeText) {
         showSnackbar("Please generate resume first.", "warning");
         return;
       }
+      startFileDownload();
       showSnackbar("Preparing DOCX download...", "info");
       try {
-        const blob = await downloadResume(resumeText);
+        const blob = await downloadResume(resumeText, "docx");
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        const fileName = generateFileName("docx", templateType, jobData);
+        const fileName = generateFileName("docx", jobData);
         a.download = fileName;
         document.body.appendChild(a);
         a.click();
         window.URL.revokeObjectURL(url);
         document.body.removeChild(a);
-        setCurrentPage(3);
+        setCurrentPage(2);
         setDownloadedFileName(fileName);
         showSnackbar("Resume DOCX downloaded successfully!", "success");
 
@@ -235,33 +298,41 @@ const ResumeCompare = ({ jobDescription, jobData, onBack }) => {
           error.message || "Failed to download DOCX resume.",
           "error"
         );
+      } finally {
+        stopLoading();
       }
     },
-    [resumeText, showSnackbar, generateFileName, googleToken, handleCleanupOnly]
+    [
+      resumeText,
+      showSnackbar,
+      generateFileName,
+      googleToken,
+      handleCleanupOnly,
+      startFileDownload,
+      stopLoading,
+    ]
   );
 
   const handleDownloadPdf = useCallback(
-    async (templateType = "clean", jobData = null) => {
+    async (jobData = null) => {
       if (!resumeText) {
         showSnackbar("Please generate resume first.", "warning");
         return;
       }
-      showSnackbar(
-        `Preparing ${templateType} template PDF download...`,
-        "info"
-      );
+      startFileDownload();
+      showSnackbar("Preparing PDF download...", "info");
       try {
-        const blob = await downloadResumePDF(resumeText, templateType, jobData);
+        const blob = await downloadResume(resumeText, "pdf");
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        const fileName = generateFileName("pdf", templateType, jobData);
+        const fileName = generateFileName("pdf", jobData);
         a.download = fileName;
         document.body.appendChild(a);
         a.click();
         window.URL.revokeObjectURL(url);
         document.body.removeChild(a);
-        setCurrentPage(3);
+        setCurrentPage(2);
         setDownloadedFileName(fileName);
         showSnackbar(
           "Professional resume PDF downloaded successfully!",
@@ -274,9 +345,18 @@ const ResumeCompare = ({ jobDescription, jobData, onBack }) => {
           error.message || "Failed to download PDF resume.",
           "error"
         );
+      } finally {
+        stopLoading();
       }
     },
-    [resumeText, showSnackbar, generateFileName, handleCleanupOnly]
+    [
+      resumeText,
+      showSnackbar,
+      generateFileName,
+      handleCleanupOnly,
+      startFileDownload,
+      stopLoading,
+    ]
   );
 
   const handleReset = useCallback(() => {
@@ -284,8 +364,18 @@ const ResumeCompare = ({ jobDescription, jobData, onBack }) => {
     setSelectedFile(null);
     setResumeText(null);
     setComparisonResult(null);
+    stopLoading();
+    setDownloadedFileName("");
     showSnackbar("Process reset.", "info");
-  }, [showSnackbar]);
+  }, [
+    showSnackbar,
+    setCurrentPage,
+    setSelectedFile,
+    setResumeText,
+    setComparisonResult,
+    stopLoading,
+    setDownloadedFileName,
+  ]);
 
   const handleSaveToGoogleDrive = useCallback(async () => {
     setShowDriveDialog(false);
@@ -408,19 +498,19 @@ const ResumeCompare = ({ jobDescription, jobData, onBack }) => {
           flex: 1,
           position: "relative",
           minHeight: 0,
-          overflow: isAnalyzing || isResumeGenerating ? "hidden" : "auto",
+          overflow: loading ? "hidden" : "auto",
         }}>
         {/* Loading Overlay */}
-        {(isAnalyzing || isResumeGenerating) && (
+        {loading && (
           <Loading
-            variant="pen"
+            variant={loadingVariant}
             message={
-              isAnalyzing
+              loadingVariant === "resume-analyze"
                 ? "Analyzing your resume..."
                 : "Generating optimized resume..."
             }
             subMessage={
-              isAnalyzing
+              loadingVariant === "resume-analyze"
                 ? "Please wait while we analyze your resume against the job description"
                 : "Creating your ATS-optimized resume"
             }
@@ -432,19 +522,19 @@ const ResumeCompare = ({ jobDescription, jobData, onBack }) => {
         <Box
           sx={{
             height: "100%",
-            overflow: isAnalyzing || isResumeGenerating ? "hidden" : "auto",
+            overflow: loading ? "hidden" : "auto",
             p: 3,
             pb: 4,
-            opacity: isAnalyzing || isResumeGenerating ? 0.3 : 1,
+            opacity: loading ? 0.3 : 1,
             transition: "opacity 0.3s ease",
-            pointerEvents: isAnalyzing || isResumeGenerating ? "none" : "auto",
+            pointerEvents: loading ? "none" : "auto",
             display: "flex",
             flexDirection: "column",
           }}>
           {currentPage === 0 && (
             <ResumeUploadPage
               selectedFile={selectedFile}
-              isAnalyzing={isAnalyzing}
+              isAnalyzing={loading && loadingVariant === "resume-analyze"}
               jobDescription={jobDescription}
               onFileSelect={handleFileSelect}
               onAnalyze={handleSendForComparison}
@@ -453,32 +543,23 @@ const ResumeCompare = ({ jobDescription, jobData, onBack }) => {
           {currentPage === 1 && (
             <ResumeAnalysisPage
               comparisonResult={comparisonResult}
-              isAnalyzing={isAnalyzing}
               onGenerateTrigger={handleGenerateResume}
             />
           )}
           {currentPage === 2 && (
-            <ResumeGeneratePage
-              generatedResumeText={resumeText}
-              isResumeGenerating={isResumeGenerating}
-              jobDescription={jobDescription}
-              comparisonResult={comparisonResult}
-              handleGenerateResume={handleGenerateResume}
-              handleDownloadDocx={handleDownloadDocx}
-              handleDownloadPdf={handleDownloadPdf}
-              jobData={jobData}
-            />
-          )}
-          {currentPage === 3 && (
             <ResumeDownloadPage
               comparisonResult={comparisonResult}
+              resumeText={resumeText}
+              handleDownloadDocx={handleDownloadDocx}
+              handleDownloadPdf={handleDownloadPdf}
               handleReset={handleReset}
-              onBack={onBack}
+              jobData={jobData}
             />
           )}
         </Box>
       </Box>
 
+      {/* Google Drive Dialog */}
       <Dialog
         open={showDriveDialog}
         onClose={handleDeclineGoogleDrive}
