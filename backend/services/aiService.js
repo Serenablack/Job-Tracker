@@ -1,16 +1,32 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { AI_CONFIG } from "../config/config.js";
+import { APP_CONFIG } from "../config/config.js";
 import { cleanAndParseJSON } from "../utils/fileUtils.js";
-import DefaultJobData from "../DefaultData.js";
+import defaultJobData from "../DefaultData.js";
+import { Ollama } from "ollama";
 
-export class AIService {
-  constructor() {
-    this.genAI = new GoogleGenerativeAI(AI_CONFIG.API_KEY);
-    this.model = this.genAI.getGenerativeModel({ model: AI_CONFIG.MODEL });
-  }
+// Initialize AI services with fallback models
+const genAI = new GoogleGenerativeAI(APP_CONFIG.AI.API_KEY);
 
-  async extractJobDetails(jobDescription) {
-    const defaultJob = { ...DefaultJobData };
+// Try multiple model names as fallbacks
+const getModel = () => {
+  const modelNames = [
+    APP_CONFIG.AI.MODEL,
+    "gemini-1.5-flash-002",
+    "gemini-1.5-flash-001", 
+    "gemini-1.5-flash",
+    "gemini-pro"
+  ];
+  
+  // For now, just use the first one, but we could implement retry logic
+  return genAI.getGenerativeModel({ model: modelNames[0] });
+};
+
+const model = getModel();
+const ollama = new Ollama();
+
+export const AIService = {
+  extractJobDetails: async (jobDescription) => {
+    const defaultJob = { ...defaultJobData };
 
     if (!jobDescription || jobDescription.trim().length === 0) {
       throw new Error("Job description text is required");
@@ -67,364 +83,257 @@ ${jobDescription}
 
 JSON Response:`;
 
-      const result = await this.model.generateContent(prompt);
-      const response = await result.response;
-      let extracted = response.text();
+      // Try with current model first
+      let result, response, extracted;
+      
+      try {
+        result = await model.generateContent(prompt);
+        response = await result.response;
+        extracted = response.text();
+      } catch (modelError) {
+        console.error("Primary model failed, trying fallback models:", modelError.message);
+        
+        // Try fallback models
+        const fallbackModels = ["gemini-1.5-flash-001", "gemini-pro"];
+        
+        for (const fallbackModelName of fallbackModels) {
+          try {
+            console.log(`Trying fallback model: ${fallbackModelName}`);
+            const fallbackModel = genAI.getGenerativeModel({ model: fallbackModelName });
+            result = await fallbackModel.generateContent(prompt);
+            response = await result.response;
+            extracted = response.text();
+            console.log(`Success with fallback model: ${fallbackModelName}`);
+            break;
+          } catch (fallbackError) {
+            console.error(`Fallback model ${fallbackModelName} failed:`, fallbackError.message);
+            continue;
+          }
+        }
+        
+        if (!extracted) {
+          throw new Error("All Gemini models failed. Please check your API key and model availability.");
+        }
+      }
 
       return cleanAndParseJSON(extracted);
     } catch (error) {
       console.error("GeminiAI extraction failed:", error);
+      
+      // Return a more helpful error message
+      if (error.message.includes("404 Not Found") && error.message.includes("models/")) {
+        throw new Error("Gemini model not found. Please check if the model name is correct and available in your region.");
+      }
+      
       throw error;
     }
-  }
+  },
 
-  async compareResumeWithJob(resumeText, jobDescription) {
+  compareResumeWithJob: async (resumeText, jobDescription) => {
     try {
-      const prompt = `
-You are an expert ATS (Applicant Tracking System) resume analyzer with a PhD in Human Resources and 20+ years of experience in talent acquisition.
+      if (!resumeText || !jobDescription) {
+        throw new Error("Resume text and job description are required");
+      }
 
-Your task is to analyze the job description and resume following these EXACT steps:
+      const prompt = `You are an expert ATS resume reviewer. Analyze the following resume against the job description.
 
-**STEP 1: Validate Job Description**
-- If the job description is missing, empty, or too short (less than 50 words), return ONLY this JSON and STOP:
-{
-  "error": "Job description is missing or insufficient for meaningful ATS analysis. Please provide a detailed job description with at least 50 words."
-}
+CRITICAL INSTRUCTIONS:
+1. Extract keywords and skills ONLY from the job description
+2. Check if these job description keywords/skills are present in the resume
+3. matchedSkills should ONLY contain skills that are explicitly mentioned in the job description AND found in the resume
+4. missingSkills should ONLY contain skills that are explicitly mentioned in the job description BUT NOT found in the resume
+5. Do NOT extract skills from the resume that are not mentioned in the job description
 
-**STEP 2: Extract Keywords from Job Description ONLY - BE EXTREMELY STRICT**
-- Extract ONLY explicit keywords, skills, technologies, tools, certifications, programming languages, frameworks, methodologies, and domain-specific terms that are LITERALLY WRITTEN in the job description text
-- NEVER infer, assume, or add generic skills that are not explicitly mentioned
-- NEVER add skills from the resume that are not in the job description
-- Focus ONLY on: Technical skills, Software names, Programming languages, Frameworks, Certifications, Industry terms, Methodologies, Tools, Required qualifications
-- Create a comprehensive list of ONLY what is explicitly stated in the job description
-
-**STEP 3: Compare with Resume - STRICT MATCHING**
-- For each keyword extracted from the job description, check if it appears in the resume text
-- Use exact matching and common synonym matching (e.g., "JavaScript" matches "JS", "React.js" matches "React", "Node.js" matches "NodeJS")
-- Categorize ONLY as:
-  - matchedSkills: Skills from job description that are found in resume
-  - missingSkills: Skills from job description that are NOT found in resume
-- NEVER include skills that are only in the resume but not in the job description
-
-**STEP 4: Generate Targeted Suggestions**
-- For each missing skill from the job description, suggest which resume section it could be added to
-- Provide actionable advice on how to integrate each missing skill naturally
-- Calculate match percentage: (matchedSkills.length / totalExtractedKeywords.length) * 100
-
-**STEP 5: Calculate Experience Match**
-- Compare years of experience, job responsibilities, and role levels mentioned in job description vs resume
-- Return percentage (0-100)
-
-**STEP 6: Calculate ATS Scores**
-- skillsMatch: Percentage of technical skills from job description found in resume
-- keywordMatch: Percentage of all keywords from job description found in resume  
-- overallScore: Weighted average of skillsMatch (40%), keywordMatch (30%), and experienceMatch (30%)
-- atsScore: ATS compatibility score (0-100) based on keyword density and formatting
-- matchPercentage: Same as overallScore for backward compatibility
-
-**CRITICAL VALIDATION RULES:**
-- matchedSkills and missingSkills must ONLY contain keywords that were explicitly mentioned in the job description
-- NEVER include generic skills like "communication", "teamwork", "problem-solving" unless they are specifically mentioned in the job description
-- If job description mentions "Python", only include "Python" in analysis, not related terms like "programming" unless also mentioned
-- Be precise and literal in keyword extraction
-- Double-check that every skill in your response actually exists in the job description
-
-Return response in this EXACT JSON format:
-{
-  "matchPercentage": <number 0-100>,
-  "matchedSkills": [<array of skills found in BOTH job description AND resume>],
-  "missingSkills": [<array of skills from job description NOT found in resume>],
-  "suggestions": [
-    {
-      "keyword": "<missing keyword from job description>",
-      "section": "<suggested resume section>",
-      "suggestion": "<specific actionable advice>"
-    }
-  ],
-  "experienceMatch": <number 0-100>,
-  "skillsMatch": <number 0-100>,
-  "keywordMatch": <number 0-100>,
-  "overallScore": <number 0-100>,
-  "atsScore": <number 0-100>,
-  "extractedKeywords": [<array of ALL keywords extracted from job description>],
-  "explanation": "<brief explanation referencing specific job description requirements and resume content>",
-  "error": null
-}
-
-**JOB DESCRIPTION TO ANALYZE:**
+Job Description:
 ${jobDescription}
 
-**RESUME CONTENT TO COMPARE:**
+Resume:
 ${resumeText}
 
-**IMPORTANT:** Before returning your response, double-check that every skill in matchedSkills and missingSkills actually exists in the job description provided above.
+ANALYSIS PROCESS:
+1. First, extract all important keywords and skills from the job description only
+2. Then, check if each of these job description keywords/skills appears in the resume
+3. Categorize them as matched (found in both) or missing (in job but not in resume)
+4. Calculate scores based on how many job description keywords are found in the resume
 
-JSON Response:
-      `;
+Return a JSON response with the following structure:
+{
+  "atsScore": <number between 0-100>,
+  "matchedSkills": [<array of skills from job description that are also found in resume>],
+  "missingSkills": [<array of skills from job description that are NOT found in resume>],
+  "suggestions": [<array of improvement suggestions>],
+  "skillsMatch": <number between 0-100>,
+  "keywordMatch": <number between 0-100>,
+  "extractedKeywords": [<array of important keywords extracted from job description only>],
+  "explanation": "<brief explanation of the analysis>"
+}
 
-      const result = await this.model.generateContent(prompt);
+Important guidelines:
+1. Focus on technical skills, tools, technologies, and methodologies from the job description
+2. Consider both exact matches and related skills when checking resume content
+3. Provide realistic scores based on actual content comparison
+4. Extract relevant keywords that would be important for ATS systems from the job description only
+5. Give actionable suggestions for improvement
+6. NEVER include skills from the resume that are not mentioned in the job description`;
+
+      const result = await model.generateContent(prompt);
       const response = await result.response;
       const text = response.text();
 
-      try {
-        const parsedResult = cleanAndParseJSON(text);
+      const analysis = cleanAndParseJSON(text);
 
-        return parsedResult;
-      } catch (parseError) {
+      return {
+        ...analysis,
+        error: null,
+      };
+    } catch (error) {
+      console.error("Error comparing resume with job:", error);
+      return {
+        matchPercentage: 0,
+        matchedSkills: [],
+        missingSkills: [],
+        suggestions: [],
+        experienceMatch: 0,
+        skillsMatch: 0,
+        keywordMatch: 0,
+        overallScore: 0,
+        atsScore: 0,
+        extractedKeywords: [],
+        explanation: "Analysis failed due to an error",
+        error: error.message,
+      };
+    }
+  },
+
+  generateATSResume: async (
+    resumeContent,
+    jobDescription,
+    comparisonResult
+  ) => {
+    try {
+      if (!resumeContent || !jobDescription || !comparisonResult) {
         throw new Error(
-          "Failed to parse AI response as JSON: " + parseError.message
+          "Resume content, job description, and comparison result are required."
         );
       }
-    } catch (error) {
-      console.error("Error comparing resume:", error);
-      throw error;
-    }
-  }
 
-  async generateATSResume(resumeContent, jobDescription, comparisonResult) {
-    try {
-      if (!resumeContent || !jobDescription) {
-        throw new Error("Resume content and job description are required");
+      const { missingSkills = [], keywords = [] } = comparisonResult;
+
+      if (!missingSkills || missingSkills.length === 0) {
+        return {
+          optimizedResume: resumeContent,
+          message: "No skills to integrate. Resume is already optimized.",
+          processingDetails: {
+            integrationStrategy: "No integration needed",
+            incorporationRate: 100,
+            incorporatedSkills: [],
+            remainingMissingSkills: [],
+            totalMissingSkills: 0,
+          },
+        };
       }
 
-      const missingSkills = comparisonResult?.missingSkills || [];
-      const matchedSkills = comparisonResult?.matchedSkills || [];
-      const allSkills = [...matchedSkills, ...missingSkills];
+      // --- Start of the enhanced prompt for the Generative AI ---
+      const prompt = `
+      **Objective:** Transform the provided 'Original Resume Content' into a highly ATS-optimized and recruiter-preferred resume. The primary goal is to strategically and contextually integrate the 'Missing Skills to Integrate' into the appropriate sections. This involves demonstrating practical application and plausibly incorporating these skills, even if it requires rephrasing existing achievements or suggesting a replacement/augmentation of current technologies where highly relevant and beneficial.
 
-      const prompt = `You are a PROFESSIONAL RESUME WRITER and ATS OPTIMIZATION EXPERT with 20+ years of experience helping job seekers land their dream jobs.
+      **Job Description (for critical context and keyword relevance):**
+      ${jobDescription}
 
-**MISSION:** Transform the provided resume into a professionally formatted, ATS-optimized document that seamlessly integrates missing keywords while maintaining authenticity and readability.
+      **Missing Skills to Integrate (comma-separated list):**
+      ${missingSkills.join(", ")}
 
-**STRICT REQUIREMENTS:**
-1. **KEYWORD INTEGRATION:** Naturally integrate ALL missing skills from the job description
-2. **PROFESSIONAL FORMATTING:** Use standard resume formatting with clear sections
-3. **ATS COMPATIBILITY:** Ensure 95%+ ATS compatibility
-4. **AUTHENTICITY:** Maintain professional credibility - no false claims
-5. **READABILITY:** Balance keyword optimization with human readability
+      **Original Resume Content (preserve all existing sections and their general formatting):**
+      ${resumeContent}
 
-**MISSING SKILLS TO INTEGRATE (MUST INCLUDE ALL):**
-${missingSkills.join(", ")}
+      ---
 
-**ALREADY MATCHED SKILLS (KEEP THESE):**
-${matchedSkills.join(", ")}
+      **Detailed Instructions for Optimization & Integration:**
 
-**INTEGRATION STRATEGY:**
+      **Phase 1: Analysis & Skill Mapping (Implicit Task for You as AI):**
+      * Thoroughly analyze the 'Original Resume Content' to understand the candidate's existing experience, core competencies, projects, and all current hard and soft skills.
+      * Carefully read the 'Job Description' to identify its key requirements, essential skills, and the most important keywords.
+      * Map the 'Missing Skills to Integrate' against the existing resume content and the job description to identify the best points of integration.
 
-**1. PROFESSIONAL SUMMARY (40% of missing skills)**
-- Integrate ${Math.ceil(missingSkills.length * 0.4)} missing skills
-- Create compelling narrative combining experience with target role requirements
-- Use quantifiable achievements and impact metrics
-- Position candidate as expert in target domain
+      **Phase 2: Strategic Skill Integration by Section:**
 
-**2. TECHNICAL SKILLS SECTION (30% of missing skills)**
-- Integrate ${Math.ceil(missingSkills.length * 0.3)} missing skills
-- Group related technologies logically
-- Use both full names and abbreviations where appropriate
-- Organize by proficiency level or category
+      1.  **Professional Summary:**
+          * **Integrate 1-3 of the most relevant missing skills** that significantly enhance the candidate's core value proposition for this specific job description.
+          * Weave these skills **naturally** into existing sentences or phrases. Focus on improving the narrative and aligning with the job description's primary focus.
+          * **AVOID simple listing or keyword stuffing.** Ensure the integration feels organic.
 
-**3. PROFESSIONAL EXPERIENCE (20% of missing skills)**
-- Integrate ${Math.ceil(missingSkills.length * 0.2)} missing skills
-- Enhance bullet points with relevant technologies and methodologies
-- Quantify achievements with metrics and impact
-- Demonstrate progression and leadership
+      2.  **CORE COMPETENCIES / Skills Section:**
+          * **Add ALL relevant missing hard skills** to their most appropriate existing categories (e.g., 'Data Analysis & Visualization', 'Database Management', 'Programming & Tools', 'Business Intelligence', 'Technical Skills', 'Soft Skills').
+          * If a missing skill does not fit neatly into an existing category, **create a new, logical category** (e.g., 'Cloud Platforms', 'DevOps Tools', 'Project Management Software') and add the skill there.
+          * Maintain the existing sub-bullet or comma-separated list format within these categories. Aim for clarity and scannability.
 
-**4. PROJECTS/ACHIEVEMENTS (10% of missing skills)**
-- Integrate remaining missing skills
-- Showcase relevant technical projects
-- Highlight problem-solving and innovation
+      3.  **PROFESSIONAL EXPERIENCE & PROJECTS (CRITICAL for Demonstration):**
+          * This is where the 'Missing Skills' must be shown *in action*.
+          * For each 'Missing Skill':
+              * **Identify Plausible Connection Points:** Scan all existing bullet points under 'PROFESSIONAL EXPERIENCE', and 'PROJECTS'. Pinpoint specific bullet points where the missing skill *could logically and plausibly have been used*, even if not explicitly stated in the original resume. Focus on achievements that implicitly align.
+              * **Rewrite/Augment Existing Bullet Points:**
+                  * **Contextual Integration:** Explicitly incorporate the missing skill into the chosen bullet point.
+                  * **Action Verbs:** Ensure the modified bullet point starts with a strong action verb (e.g., 'Developed', 'Implemented', 'Utilized', 'Managed', 'Orchestrated', 'Automated').
+                  * **Quantifiable Impact:** Whenever possible, connect the newly integrated skill to the existing quantifiable achievement (numbers, percentages, metrics) or, if adding a new bullet, suggest a plausible, measurable outcome from its use.
+                  * **Tech Stack Replacement/Augmentation (Crucial):**
+                      * If a 'Missing Skill' is a **more modern, relevant, or directly superior technology** to one already mentioned in a bullet point (and aligns better with the Job Description), **replace or augment** the existing technology.
+                      * **Example 1 (Replacement):** If original says "Managed data in old-SQL-tool" and missing is "Snowflake," consider: "Managed large-scale data warehouses using **Snowflake** to support real-time analytics dashboards..."
+                      * **Example 2 (Augmentation):** If original says "Integrated AWS services..." and missing is "Azure," consider: "Integrated cloud services (AWS, **Azure**) to enhance application scalability and optimize content delivery..."
+                      * **Plausibility:** ONLY make these changes if they are highly plausible given the candidate's overall profile and the context of the achievement. **Do not invent entirely new, unrelated experiences.**
+              * **Prioritization:** Prioritize integrating missing skills into roles/projects that are most relevant to the 'Job Description'.
 
-**FORMATTING REQUIREMENTS:**
-- Use clean, professional formatting
-- Maintain consistent spacing and alignment
-- Use bullet points for achievements and responsibilities
-- Include quantifiable metrics where possible
-- Ensure proper section hierarchy
+      **Phase 3: Overall ATS Optimization & Final Formatting Adherence:**
 
-**RESUME CONTENT TO OPTIMIZE:**
-${resumeContent}
+      1.  **Keyword Density & Distribution:** Ensure the integrated 'Missing Skills' (and other important keywords from the JD) appear naturally across multiple sections (Professional Summary, CORE COMPETENCIES, Professional Experience, Projects) for optimal ATS parsing. Avoid unnatural repetition.
+      2.  **Preserve Original Formatting:** Maintain the candidate's original resume's overall structure, section headings (e.g., bolding, capitalization), bullet point style, spacing, and font choices (implicitly, by outputting plain text that retains the visual structure). Do not introduce tables, columns, or complex graphical elements.
+      3.  **Maintain Professional Tone:** Ensure the language remains professional, concise, and impactful throughout the entire resume.
+      4.  **Thorough Proofreading:** Implicitly proofread for grammatical errors, spelling mistakes, and clarity after all integrations are complete.
 
-**JOB DESCRIPTION FOR CONTEXT:**
-${jobDescription}
+      **Output Requirement:**
+      Return **ONLY** the complete, optimized resume text, ready for direct use. Do not include any conversational filler, explanations, or extraneous text beyond the resume content itself.
+      `;
+      // --- End of the enhanced prompt for the Generative AI ---
 
-**TASK:** Generate a professionally formatted, ATS-optimized resume that:
-1. Integrates ALL missing skills naturally
-2. Maintains professional credibility
-3. Uses clear, readable formatting
-4. Demonstrates quantifiable achievements
-5. Optimizes for ATS systems
+      const response = await model.generateContent(prompt);
+      const result = await response.response;
+      const optimizedResume = result.text();
 
-Return the optimized resume in clean, professional format with proper sections and formatting.`;
+      // Validate skill incorporation (this part of the function logic is robust)
+      const incorporatedSkills = missingSkills.filter((skill) =>
+        optimizedResume.toLowerCase().includes(skill.toLowerCase())
+      );
 
-      const response = await this.model.generateContent(prompt);
-      const optimizedResume = response.response.text();
-
-      if (!optimizedResume) {
-        throw new Error("Failed to generate optimized resume");
-      }
+      const remainingMissingSkills = missingSkills.filter(
+        (skill) => !incorporatedSkills.includes(skill)
+      );
 
       return {
         optimizedResume,
-        message: "Resume optimized successfully with ATS keywords integration",
+        message: "Resume optimized successfully with integrated skills",
+        processingDetails: {
+          integrationStrategy: "Contextual skill integration",
+          incorporationRate: Math.round(
+            (incorporatedSkills.length / missingSkills.length) * 100
+          ),
+          incorporatedSkills,
+          remainingMissingSkills,
+          totalMissingSkills: missingSkills.length,
+        },
       };
     } catch (error) {
       console.error("Error generating ATS resume:", error);
-      throw new Error(`Failed to generate ATS resume: ${error.message}`);
+      throw error;
     }
-  }
+  },
 
-  async generateFormattedResumeTemplate(
-    resumeContent,
-    jobDescription,
-    comparisonResult,
-    format = "markdown"
-  ) {
-    try {
-      if (!resumeContent || !jobDescription) {
-        throw new Error("Resume content and job description are required");
-      }
-
-      const missingSkills = comparisonResult?.missingSkills || [];
-      const matchedSkills = comparisonResult?.matchedSkills || [];
-      const allSkills = [...matchedSkills, ...missingSkills];
-
-      const formatInstructions =
-        format === "latex"
-          ? `
-**LATEX FORMATTING REQUIREMENTS:**
-- Use proper LaTeX resume template structure
-- Include \\documentclass{article} and necessary packages
-- Use \\section{} for major sections
-- Use \\textbf{} for bold text
-- Use \\textit{} for italic text
-- Use proper spacing with \\vspace{} and \\hspace{}
-- Use itemize environment for bullet points
-- Ensure proper margins and spacing
-- Use professional fonts and formatting
-`
-          : `
-**MARKDOWN FORMATTING REQUIREMENTS:**
-- Use clean markdown formatting
-- Use # for main sections, ## for subsections
-- Use bullet points with - or *
-- Use **bold** for emphasis
-- Use *italic* for secondary information
-- Maintain consistent spacing
-- Use proper hierarchy and structure
-`;
-
-      const prompt = `You are a PROFESSIONAL RESUME WRITER and ATS OPTIMIZATION EXPERT with 20+ years of experience helping job seekers land their dream jobs.
-
-**MISSION:** Create a professionally formatted resume template in ${format.toUpperCase()} format that seamlessly integrates ATS keywords while maintaining authenticity and readability.
-
-**STRICT REQUIREMENTS:**
-1. **KEYWORD INTEGRATION:** Naturally integrate ALL missing skills from the job description
-2. **PROFESSIONAL FORMATTING:** Use ${format.toUpperCase()} formatting with clear sections
-3. **ATS COMPATIBILITY:** Ensure 95%+ ATS compatibility
-4. **AUTHENTICITY:** Maintain professional credibility - no false claims
-5. **READABILITY:** Balance keyword optimization with human readability
-
-**MISSING SKILLS TO INTEGRATE (MUST INCLUDE ALL):**
-${missingSkills.join(", ")}
-
-**ALREADY MATCHED SKILLS (KEEP THESE):**
-${matchedSkills.join(", ")}
-
-**INTEGRATION STRATEGY:**
-
-**1. PROFESSIONAL SUMMARY (40% of missing skills)**
-- Integrate ${Math.ceil(missingSkills.length * 0.4)} missing skills
-- Create compelling narrative combining experience with target role requirements
-- Use quantifiable achievements and impact metrics
-- Position candidate as expert in target domain
-
-**2. TECHNICAL SKILLS SECTION (30% of missing skills)**
-- Integrate ${Math.ceil(missingSkills.length * 0.3)} missing skills
-- Group related technologies logically
-- Use both full names and abbreviations where appropriate
-- Organize by proficiency level or category
-
-**3. PROFESSIONAL EXPERIENCE (20% of missing skills)**
-- Integrate ${Math.ceil(missingSkills.length * 0.2)} missing skills
-- Enhance bullet points with relevant technologies and methodologies
-- Quantify achievements with metrics and impact
-- Demonstrate progression and leadership
-
-**4. PROJECTS/ACHIEVEMENTS (10% of missing skills)**
-- Integrate remaining missing skills
-- Showcase relevant technical projects
-- Highlight problem-solving and innovation
-
-${formatInstructions}
-
-**RESUME CONTENT TO OPTIMIZE:**
-${resumeContent}
-
-**JOB DESCRIPTION FOR CONTEXT:**
-${jobDescription}
-
-**TASK:** Generate a professionally formatted, ATS-optimized resume in ${format.toUpperCase()} format that:
-1. Integrates ALL missing skills naturally
-2. Maintains professional credibility
-3. Uses clear, readable ${format.toUpperCase()} formatting
-4. Demonstrates quantifiable achievements
-5. Optimizes for ATS systems
-
-Return the optimized resume in ${format.toUpperCase()} format with proper sections and formatting.`;
-
-      const response = await this.model.generateContent(prompt);
-      const formattedResume = response.response.text();
-
-      if (!formattedResume) {
-        throw new Error("Failed to generate formatted resume template");
-      }
-
-      return {
-        formattedResume,
-        format: format,
-        message: `Resume template generated successfully in ${format.toUpperCase()} format with ATS keywords integration`,
-      };
-    } catch (error) {
-      console.error("Error generating formatted resume template:", error);
-      throw new Error(
-        `Failed to generate formatted resume template: ${error.message}`
-      );
+  validateKeywordsInJobDescription: (keywords, jobDescription) => {
+    if (!keywords || !Array.isArray(keywords)) {
+      return false;
     }
-  }
 
-  validateKeywordsInJobDescription(keywords, jobDescription) {
     const jobDescriptionLower = jobDescription.toLowerCase();
-    const validKeywords = [];
-    const invalidKeywords = [];
-
-    keywords.forEach((keyword) => {
-      const keywordLower = keyword.toLowerCase();
-
-      const variations = [
-        keywordLower,
-        keywordLower.replace(/\s+/g, ""),
-        keywordLower.replace(/[.-]/g, ""),
-        keywordLower + "s",
-        keywordLower.replace(/s$/, ""),
-      ];
-
-      const isValid = variations.some((variation) =>
-        jobDescriptionLower.includes(variation)
-      );
-
-      if (isValid) {
-        validKeywords.push(keyword);
-      } else {
-        invalidKeywords.push(keyword);
-      }
-    });
-
-    return {
-      validKeywords,
-      invalidKeywords,
-      validationRate:
-        keywords.length > 0
-          ? (validKeywords.length / keywords.length) * 100
-          : 100,
-    };
-  }
-}
+    return keywords.every((keyword) =>
+      jobDescriptionLower.includes(keyword.toLowerCase())
+    );
+  },
+};
