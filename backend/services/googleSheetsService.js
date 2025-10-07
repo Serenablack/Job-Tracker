@@ -1,31 +1,46 @@
 import { google } from "googleapis";
-import { getAuth, getUserAuth, GOOGLE_CONFIG } from "../config/config.js";
+import { getAuth, getUserAuth, APP_CONFIG } from "../config/config.js";
 import { getJobsFilePath } from "../utils/fileUtils.js";
 import fs from "fs";
 
-export class GoogleSheetsService {
-  constructor() {
-    this.auth = null;
-    this.sheets = null;
-    this.drive = null;
-  }
+export const GoogleSheetsService = {
+  auth: null,
+  sheets: null,
+  drive: null,
 
-  initializeServiceAuth() {
-    this.auth = getAuth();
-    this.sheets = google.sheets({ version: "v4", auth: this.auth });
-    this.drive = google.drive({ version: "v3", auth: this.auth });
-  }
+  initializeServiceAuth: () => {
+    GoogleSheetsService.auth = getAuth();
+    GoogleSheetsService.sheets = google.sheets({
+      version: "v4",
+      auth: GoogleSheetsService.auth,
+    });
+    GoogleSheetsService.drive = google.drive({
+      version: "v3",
+      auth: GoogleSheetsService.auth,
+    });
+  },
 
-  initializeUserAuth(token) {
-    this.auth = getUserAuth(token);
-    this.sheets = google.sheets({ version: "v4", auth: this.auth });
-    this.drive = google.drive({ version: "v3", auth: this.auth });
-  }
+  initializeUserAuth: (token) => {
+    GoogleSheetsService.auth = getUserAuth(token);
+    GoogleSheetsService.sheets = google.sheets({
+      version: "v4",
+      auth: GoogleSheetsService.auth,
+    });
+    GoogleSheetsService.drive = google.drive({
+      version: "v3",
+      auth: GoogleSheetsService.auth,
+    });
+  },
 
-  async uploadFileToSheets(token) {
+  uploadFileToSheets: async (token) => {
     try {
-      this.initializeUserAuth(token);
+      GoogleSheetsService.initializeUserAuth(token);
       const filePath = getJobsFilePath();
+
+      // Check if file exists
+      if (!fs.existsSync(filePath)) {
+        throw new Error(`Jobs file not found at path: ${filePath}`);
+      }
 
       const fileMetadata = {
         name: "Jobs_applied",
@@ -38,7 +53,7 @@ export class GoogleSheetsService {
         body: fs.createReadStream(filePath),
       };
 
-      const response = await this.drive.files.create({
+      const response = await GoogleSheetsService.drive.files.create({
         resource: fileMetadata,
         media: media,
         fields: "id",
@@ -46,7 +61,7 @@ export class GoogleSheetsService {
 
       const fileId = response.data.id;
 
-      const copyResponse = await this.drive.files.copy({
+      const copyResponse = await GoogleSheetsService.drive.files.copy({
         fileId: fileId,
         resource: {
           name: "Jobs_applied",
@@ -54,8 +69,7 @@ export class GoogleSheetsService {
         },
       });
 
-      await this.drive.files.delete({ fileId: fileId });
-
+      await GoogleSheetsService.drive.files.delete({ fileId: fileId });
       const sheetId = copyResponse.data.id;
 
       return {
@@ -66,9 +80,9 @@ export class GoogleSheetsService {
       console.error("Error uploading file to Google Drive:", error);
       throw error;
     }
-  }
+  },
 
-  async addJobToSheet(sheetId, jobData) {
+  addJobToSheet: async (sheetId, jobData) => {
     try {
       const values = [
         [
@@ -84,90 +98,96 @@ export class GoogleSheetsService {
         ],
       ];
 
-      const response = this.sheets.spreadsheets.values.append({
-        spreadsheetId: sheetId,
-        range: "Sheet1!A1",
-        valueInputOption: "USER_ENTERED",
-        resource: { values },
-      });
+      const response =
+        await GoogleSheetsService.sheets.spreadsheets.values.append({
+          spreadsheetId: sheetId,
+          range: "Sheet1!A1",
+          valueInputOption: "USER_ENTERED",
+          resource: { values },
+        });
 
       return { message: "Job details added to Google Sheet successfully!" };
     } catch (error) {
-      console.error(
-        "Error adding row to Google Sheet:",
-        error.message,
-        error.response?.data
-      );
+      console.error("Error adding job to Google Sheet:", error.message);
       throw error;
     }
-  }
+  },
 
-  async saveResumeToGoogleDrive(token, resumeBlob, filename) {
+  saveResumeToGoogleDrive: async (resumeText, fileName, jobData) => {
     try {
-      this.initializeUserAuth(token);
+      GoogleSheetsService.initializeServiceAuth();
 
-      let folderId = await this.getOrCreateResumeFolder();
+      // Create a simple text file with resume content
+      const tempFilePath = `./temp_${fileName}.txt`;
+      fs.writeFileSync(tempFilePath, resumeText);
 
       const fileMetadata = {
-        name: filename,
-        parents: [folderId],
+        name: fileName,
+        parents: [],
       };
 
       const media = {
-        mimeType:
-          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        body: resumeBlob,
+        mimeType: "text/plain",
+        body: fs.createReadStream(tempFilePath),
       };
 
-      const response = await this.drive.files.create({
+      const response = await GoogleSheetsService.drive.files.create({
         resource: fileMetadata,
         media: media,
-        fields: "id, name, webViewLink",
+        fields: "id, webViewLink",
       });
+
+      // Clean up temporary file
+      fs.unlinkSync(tempFilePath);
 
       return {
         fileId: response.data.id,
-        filename: response.data.name,
-        webViewLink: response.data.webViewLink,
-        message: "Resume saved to Google Drive successfully!",
+        fileUrl: response.data.webViewLink,
+        message: "Resume saved to Google Drive successfully",
       };
     } catch (error) {
       console.error("Error saving resume to Google Drive:", error);
       throw error;
     }
-  }
+  },
 
-  async getOrCreateResumeFolder() {
+  getOrCreateResumeFolder: async () => {
     try {
-      const searchResponse = await this.drive.files.list({
-        q: "name='resume' and mimeType='application/vnd.google-apps.folder' and trashed=false",
+      GoogleSheetsService.initializeServiceAuth();
+
+      // Search for existing resume folder
+      const response = await GoogleSheetsService.drive.files.list({
+        q: "name='Resume Folder' and mimeType='application/vnd.google-apps.folder'",
+        spaces: "drive",
         fields: "files(id, name)",
       });
 
-      if (searchResponse.data.files && searchResponse.data.files.length > 0) {
-        return searchResponse.data.files[0].id;
+      if (response.data.files.length > 0) {
+        return response.data.files[0].id;
       }
 
+      // Create new folder if it doesn't exist
       const folderMetadata = {
-        name: "resume",
+        name: "Resume Folder",
         mimeType: "application/vnd.google-apps.folder",
       };
 
-      const createResponse = await this.drive.files.create({
+      const folder = await GoogleSheetsService.drive.files.create({
         resource: folderMetadata,
         fields: "id",
       });
 
-      return createResponse.data.id;
+      return folder.data.id;
     } catch (error) {
       console.error("Error getting or creating resume folder:", error);
       throw error;
     }
-  }
+  },
 
-  async addJobLegacy(jobData) {
+  addJobLegacy: async (jobData) => {
     try {
-      this.initializeServiceAuth();
+      GoogleSheetsService.initializeServiceAuth();
+
       const values = [
         [
           jobData.company,
@@ -176,21 +196,21 @@ export class GoogleSheetsService {
           jobData.location,
           jobData.type,
           jobData.details,
-          new Date().toISOString(),
+          new Date().toLocaleString(),
         ],
       ];
 
-      await this.sheets.spreadsheets.values.append({
-        spreadsheetId: GOOGLE_CONFIG.SHEET_ID,
+      const response = GoogleSheetsService.sheets.spreadsheets.values.append({
+        spreadsheetId: APP_CONFIG.GOOGLE.SHEET_ID,
         range: "Sheet1!A1",
         valueInputOption: "USER_ENTERED",
-        requestBody: { values },
+        resource: { values },
       });
 
-      return { message: "Job added to Google Sheet" };
+      return { message: "Job details added to Google Sheet successfully!" };
     } catch (error) {
       console.error("Error adding job to Google Sheet:", error);
       throw error;
     }
-  }
-}
+  },
+};
