@@ -1,89 +1,142 @@
 import { AIService } from "../services/aiService.js";
 import { GoogleSheetsService } from "../services/googleSheetsService.js";
 import { google } from "googleapis";
-import { getUserAuth } from "../config/config.js";
+import { getUserAuth, getValidUserAuth } from "../config/config.js";
 
-const aiService = new AIService();
-const googleSheetsService = new GoogleSheetsService();
+const aiService = AIService;
+const googleSheetsService = GoogleSheetsService;
 
 const extractJobDetails = async (req, res) => {
   try {
     const { jobDescription } = req.body;
     const jobDetails = await aiService.extractJobDetails(jobDescription);
-    res.json({ success: true, jobDetails });
+    res.json({
+      success: true,
+      data: jobDetails,
+      message: "Job details extracted successfully",
+    });
   } catch (error) {
     console.error("Error extracting job details:", error);
     res.status(500).json({
-      error: "GeminiAI extraction failed",
-      details: error.message,
+      success: false,
+      data: "GeminiAI extraction failed",
+      message: error.message,
     });
   }
 };
 
-const addJobLegacy = async (req, res) => {
+const compareResumeWithJob = async (req, res) => {
   try {
-    const { company, jdLink, salary, location, type, details } = req.body;
-    const result = await googleSheetsService.addJobLegacy({
-      company,
-      jdLink,
-      salary,
-      location,
-      type,
-      details,
+    const { resumeText, jobDescription } = req.body;
+    const comparison = await aiService.compareResumeWithJob(
+      resumeText,
+      jobDescription
+    );
+    res.json({
+      success: true,
+      data: comparison,
+      message: "Resume comparison completed successfully",
     });
-    res.json(result);
   } catch (error) {
-    console.error("Error adding job to Google Sheet:", error);
+    console.error("Error comparing resume with job:", error);
     res.status(500).json({
-      message: "Failed to add job to Google Sheet",
-      error: error.message,
+      success: false,
+      data: "Resume comparison failed",
+      message: error.message,
     });
   }
 };
 
-const addJobToSheet = async (req, res) => {
-  const { sheetId } = req.params;
+// New endpoint for uploading file to sheets (matches frontend expectation)
+const uploadFileToSheets = async (req, res) => {
   try {
-    const {
-      company,
-      title,
-      salary,
-      location,
-      type,
-      experience,
-      workModel,
-      education,
-    } = req.body;
+    const token = req.userToken;
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        data: "No authorization token provided",
+        message: "Authentication required",
+      });
+    }
 
+    const result = await googleSheetsService.uploadFileToSheets(token);
+    res.json({
+      success: true,
+      data: result.fileId,
+      message: result.message,
+    });
+  } catch (error) {
+    console.error("Error uploading file to Google Drive:", error);
+    res.status(500).json({
+      success: false,
+      data: "Failed to upload file to Google Drive",
+      message: error.message,
+    });
+  }
+};
+
+// New endpoint for adding job to specific sheet (matches frontend expectation)
+const addJobToSheet = async (req, res) => {
+  try {
+    const { sheetId } = req.params;
+    const jobData = req.body;
     const token = req.userToken;
 
     if (!token) {
-      return res.status(401).json({ error: "No authorization token provided" });
+      return res.status(401).json({
+        success: false,
+        data: "No authorization token provided",
+        message: "Authentication required",
+      });
     }
-
-    const auth = getUserAuth(token);
 
     if (!sheetId) {
       return res.status(400).json({
-        message: "Google Sheet ID is required in the request body.",
+        success: false,
+        data: "Sheet ID is required",
+        message: "Sheet ID is missing",
+      });
+    }
+
+    // Validate required job data
+    if (!jobData.company || !jobData.title) {
+      return res.status(400).json({
+        success: false,
+        data: "Company and title are required",
+        message: "Company and job title are required fields",
+      });
+    }
+
+    // Use enhanced auth with token validation and refresh
+    let auth, newTokens;
+    try {
+      const authResult = await getValidUserAuth({ access_token: token });
+      auth = authResult.auth;
+      newTokens = authResult.newTokens;
+    } catch (authError) {
+      console.error('Authentication failed:', authError);
+      return res.status(401).json({
+        success: false,
+        data: "Invalid or expired token",
+        message: "Please re-authenticate with Google",
       });
     }
 
     const sheets = google.sheets({ version: "v4", auth });
 
     const newRow = [
-      company,
-      title,
-      salary,
-      location,
-      type,
-      experience,
-      workModel,
-      education,
+      jobData.company,
+      jobData.title,
+      jobData.salary || "",
+      jobData.location || "",
+      jobData.type || "",
+      jobData.experience || "",
+      jobData.workModel || "",
+      jobData.education || "",
       new Date().toLocaleString(),
     ];
 
-    sheets.spreadsheets.values.append({
+    await sheets.spreadsheets.values.append({
       spreadsheetId: sheetId,
       range: "Sheet1!A1",
       valueInputOption: "USER_ENTERED",
@@ -92,34 +145,59 @@ const addJobToSheet = async (req, res) => {
       },
     });
 
-    res.status(200).json({
-      message: "Job details added to Google Sheet successfully!",
-    });
-  } catch (err) {
-    console.error("Error adding row to Google Sheet:", err.message);
-    res.status(500).json({
-      message: "Failed to add job details to Google Sheet.",
-      error: err.message,
-    });
-  }
-};
-
-const uploadFileToSheets = async (req, res) => {
-  try {
-    const token = req.userToken;
-    if (!token) {
-      return res.status(401).json({ error: "No authorization token provided" });
+    const responseData = { jobAdded: true };
+    
+    // Include new tokens if they were refreshed
+    if (newTokens) {
+      responseData.newTokens = newTokens;
     }
 
-    const result = await googleSheetsService.uploadFileToSheets(token);
-    res.json(result);
+    res.status(200).json({
+      success: true,
+      data: responseData,
+      message: "Job added to sheet successfully!",
+    });
   } catch (error) {
-    console.error("Error uploading file to Google Drive:", error);
+    console.error("Error adding job to sheet:", error);
+
+    // Handle specific Google Sheets API errors
+    if (error.code === 404) {
+      return res.status(404).json({
+        success: false,
+        data: "Sheet not found",
+        message:
+          "The specified Google Sheet was not found or you don't have access to it",
+      });
+    }
+
+    if (error.code === 401 || error.status === 401) {
+      return res.status(401).json({
+        success: false,
+        data: "Authentication failed",
+        message: "Your Google authentication has expired. Please sign in again.",
+      });
+    }
+
+    if (error.code === 403) {
+      return res.status(403).json({
+        success: false,
+        data: "Access denied",
+        message: "You don't have permission to access this Google Sheet",
+      });
+    }
+
     res.status(500).json({
-      message: "Failed to upload file to Google Drive",
-      error: error.message,
+      success: false,
+      data: "Failed to add job to sheet",
+      message: error.message || "An unexpected error occurred",
     });
   }
 };
 
-export { extractJobDetails, addJobLegacy, addJobToSheet, uploadFileToSheets };
+// Export JobController object with all required methods
+export const JobController = {
+  extractJobDetails,
+  compareResumeWithJob,
+  addJobToSheet,
+  uploadFileToSheets,
+};
