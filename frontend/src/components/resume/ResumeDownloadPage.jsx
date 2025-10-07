@@ -1,169 +1,288 @@
-import React from "react";
+import React, { useState } from "react";
 import {
   Box,
   Typography,
-  Card,
-  CardContent,
-  Grid,
-  Chip,
-  Alert,
+  List,
+  ListItem,
+  ListItemIcon,
+  ListItemText,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
 } from "@mui/material";
 import {
-  Download as DownloadIcon,
   CheckCircle as CheckIcon,
-  TrendingUp as TrendingUpIcon,
-  Refresh as RefreshIcon,
+  PictureAsPdf as PdfIcon,
+  Description as DocIcon,
 } from "@mui/icons-material";
 import { PrimaryButton, SecondaryButton } from "../common";
 
-const ResumeDownloadPage = ({ generatedResume, onReset, onBack }) => {
-  const handleDownload = () => {
-    if (generatedResume) {
-      // Simulate download
-      const link = document.createElement("a");
-      link.href = generatedResume.downloadUrl;
-      link.download = generatedResume.filename;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+const ResumeDownloadPage = ({
+  comparisonResult,
+  resumeText,
+  handleDownloadDocx,
+  handleDownloadPdf,
+  jobData,
+}) => {
+  const [showPreview, setShowPreview] = useState(false);
+
+  // Safely extract improvements with comprehensive fallbacks
+  const improvements = React.useMemo(() => {
+    if (!comparisonResult || typeof comparisonResult !== "object") {
+      return [
+        "Enhanced with missing keywords",
+        "Improved ATS compatibility",
+        "Optimized formatting",
+        "Added relevant skills",
+      ];
+    }
+
+    const extractedImprovements =
+      comparisonResult.improvements ||
+      comparisonResult.suggestions ||
+      comparisonResult.recommendations ||
+      [];
+
+    // Ensure we have an array
+    if (
+      Array.isArray(extractedImprovements) &&
+      extractedImprovements.length > 0
+    ) {
+      return extractedImprovements;
+    }
+
+    // Fallback improvements based on available data
+    const fallbackImprovements = [];
+
+    if (comparisonResult.missingSkills?.length > 0) {
+      fallbackImprovements.push(
+        `Added ${comparisonResult.missingSkills.length} missing skills`
+      );
+    }
+
+    if (comparisonResult.atsScore || comparisonResult.overallScore) {
+      fallbackImprovements.push("Improved ATS compatibility score");
+    }
+
+    if (comparisonResult.keywordMatch !== undefined) {
+      fallbackImprovements.push("Enhanced keyword optimization");
+    }
+
+    // Add generic improvements if no specific ones found
+    if (fallbackImprovements.length === 0) {
+      fallbackImprovements.push(
+        "Enhanced with missing keywords",
+        "Improved ATS compatibility",
+        "Optimized formatting",
+        "Added relevant skills"
+      );
+    }
+
+    return fallbackImprovements;
+  }, [comparisonResult]);
+
+  const handleDownload = async (format) => {
+    if (!resumeText || resumeText.trim() === "") {
+      console.error("No resume text available for download");
+      return;
+    }
+
+    try {
+      if (format === "pdf" && typeof handleDownloadPdf === "function") {
+        await handleDownloadPdf("clean", jobData);
+      } else if (
+        format === "docx" &&
+        typeof handleDownloadDocx === "function"
+      ) {
+        await handleDownloadDocx("clean", jobData);
+      } else {
+        console.error(
+          `Invalid download format: ${format} or handler not available`
+        );
+      }
+    } catch (error) {
+      console.error("Download failed:", error);
+      // Show user notification for download errors
+      if (typeof window !== "undefined" && window.showSnackbar) {
+        window.showSnackbar(`Download failed: ${error.message}`, "error");
+      }
     }
   };
 
-  const handleNewComparison = () => {
-    onReset();
-  };
+  // Early return if no resume text available
+  if (!resumeText || resumeText.trim() === "") {
+    return (
+      <Box sx={{ textAlign: "center", py: 2 }}>
+        <Typography variant="h6" color="error" gutterBottom>
+          Resume Generation Required
+        </Typography>
+        <Typography variant="body2" color="text.secondary">
+          Please generate your resume first before downloading.
+        </Typography>
+      </Box>
+    );
+  }
 
   return (
-    <Card
-      sx={{
-        maxWidth: 800,
-        mx: "auto",
-        bgcolor: "background.paper",
-        borderRadius: 2,
-        boxShadow: 1,
-      }}>
-      <CardContent sx={{ p: 4 }}>
-        <Box sx={{ textAlign: "center", mb: 4 }}>
-          <CheckIcon sx={{ fontSize: 48, color: "success.main", mb: 2 }} />
-          <Typography variant="h5" sx={{ fontWeight: 600, mb: 1 }}>
-            Resume Optimization Complete!
+    <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+      {/* Header */}
+      <Box sx={{ textAlign: "center", mb: 1 }}>
+        <CheckIcon sx={{ color: "success.main", mb: 0.25 }} />
+        <Typography variant="h6" fontWeight={600}>
+          Resume Ready for Download
+        </Typography>
+      </Box>
+
+      {/* Improvements List */}
+      {improvements && improvements.length > 0 && (
+        <Box
+          sx={{
+            p: 1,
+            border: "1px solid",
+            borderColor: "success.main",
+            borderRadius: 1,
+            bgcolor: "success.50",
+            mb: 1,
+          }}>
+          <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 0.5 }}>
+            Key Improvements ({improvements.length})
           </Typography>
-          <Typography variant="body1" color="text.secondary">
-            Your ATS-optimized resume is ready for download
-          </Typography>
+          <List dense sx={{ py: 0 }}>
+            {improvements.slice(0, 3).map((improvement, index) => (
+              <ListItem key={index}>
+                <ListItemIcon>
+                  <CheckIcon color="success" />
+                </ListItemIcon>
+                <ListItemText
+                  primary={improvement}
+                  primaryTypographyProps={{ variant: "caption" }}
+                />
+              </ListItem>
+            ))}
+          </List>
         </Box>
+      )}
 
-        {/* Success Alert */}
-        <Alert severity="success" sx={{ mb: 4 }}>
-          <Typography variant="h6" sx={{ fontWeight: 600 }}>
-            Optimization Successful
-          </Typography>
-          <Typography variant="body2">
-            Your resume has been enhanced with missing keywords and optimized
-            for ATS systems.
-          </Typography>
-        </Alert>
-
-        {/* Resume Details */}
-        {generatedResume && (
-          <Box sx={{ mb: 4 }}>
-            <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>
-              Resume Details
-            </Typography>
-            <Grid container spacing={2}>
-              <Grid item xs={12} sm={6}>
-                <Box sx={{ p: 2, bgcolor: "primary.50", borderRadius: 2 }}>
-                  <Typography variant="body2" color="text.secondary">
-                    Filename
-                  </Typography>
-                  <Typography variant="h6" sx={{ fontWeight: 600 }}>
-                    {generatedResume.filename}
-                  </Typography>
-                </Box>
-              </Grid>
-              <Grid item xs={12} sm={6}>
-                <Box sx={{ p: 2, bgcolor: "success.50", borderRadius: 2 }}>
-                  <Typography variant="body2" color="text.secondary">
-                    Status
-                  </Typography>
-                  <Typography
-                    variant="h6"
-                    sx={{ fontWeight: 600, color: "success.main" }}>
-                    Ready for Download
-                  </Typography>
-                </Box>
-              </Grid>
-            </Grid>
-          </Box>
-        )}
-
-        {/* Improvements Summary */}
-        {generatedResume?.improvements && (
-          <Box sx={{ mb: 4 }}>
-            <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>
-              <TrendingUpIcon sx={{ mr: 1, verticalAlign: "middle" }} />
-              Key Improvements Made
-            </Typography>
-            <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
-              {generatedResume.improvements.map((improvement, index) => (
-                <Alert key={index} severity="info" sx={{ py: 1 }}>
-                  {improvement}
-                </Alert>
-              ))}
-            </Box>
-          </Box>
-        )}
-
-        {/* Action Buttons */}
-        <Box sx={{ textAlign: "center" }}>
-          <Grid container spacing={2} justifyContent="center">
-            <Grid item>
-              <PrimaryButton
-                onClick={handleDownload}
-                startIcon={<DownloadIcon />}
-                size="large"
-                sx={{ px: 4 }}>
-                Download Resume
-              </PrimaryButton>
-            </Grid>
-            <Grid item>
-              <SecondaryButton
-                onClick={handleNewComparison}
-                startIcon={<RefreshIcon />}
-                size="large"
-                sx={{ px: 4 }}>
-                Start New Comparison
-              </SecondaryButton>
-            </Grid>
-            <Grid item>
-              <SecondaryButton onClick={onBack} size="large" sx={{ px: 4 }}>
-                Back to Analysis
-              </SecondaryButton>
-            </Grid>
-          </Grid>
+      {/* Download Options */}
+      <Box sx={{ display: "flex", gap: 1, mb: 1 }}>
+        <Box sx={{ flex: 1 }}>
+          <PrimaryButton
+            fullWidth
+            size="medium"
+            startIcon={<PdfIcon />}
+            onClick={() => handleDownload("pdf")}
+            sx={{
+              background: "linear-gradient(45deg, #f44336 30%, #ff9800 90%)",
+              "&:hover": {
+                background: "linear-gradient(45deg, #d32f2f 30%, #f57c00 90%)",
+              },
+            }}>
+            Download PDF
+          </PrimaryButton>
         </Box>
-
-        {/* Tips */}
-        <Box sx={{ mt: 4, p: 3, bgcolor: "info.50", borderRadius: 2 }}>
-          <Typography
-            variant="h6"
-            sx={{ fontWeight: 600, mb: 2, color: "info.main" }}>
-            💡 Pro Tips
-          </Typography>
-          <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
-            <Typography variant="body2" color="text.secondary">
-              • Customize the resume further based on specific job requirements
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              • Keep your resume updated with new skills and experiences
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              • Use this tool for each job application to maximize your chances
-            </Typography>
-          </Box>
+        <Box sx={{ flex: 1 }}>
+          <PrimaryButton
+            fullWidth
+            size="medium"
+            startIcon={<DocIcon />}
+            onClick={() => handleDownload("docx")}
+            sx={{
+              background: "linear-gradient(45deg, #2196f3 30%, #21cbf3 90%)",
+              "&:hover": {
+                background: "linear-gradient(45deg, #1976d2 30%, #1e88e5 90%)",
+              },
+            }}>
+            Download DOCX
+          </PrimaryButton>
         </Box>
-      </CardContent>
-    </Card>
+      </Box>
+
+      {/* Preview Option */}
+      <Box sx={{ textAlign: "center" }}>
+        <SecondaryButton
+          variant="text"
+          size="small"
+          onClick={() => setShowPreview(true)}>
+          📄 Preview Resume
+        </SecondaryButton>
+      </Box>
+
+      {/* Preview Dialog */}
+      <Dialog
+        maxWidth="md"
+        fullWidth
+        open={showPreview}
+        onClose={() => setShowPreview(false)}>
+        <DialogTitle>
+          <Typography variant="h6" fontWeight={600}>
+            Resume Preview
+          </Typography>
+        </DialogTitle>
+        <DialogContent>
+          <Box
+            sx={{
+              height: 400,
+              overflow: "auto",
+              bgcolor: "background.paper",
+              border: "1px solid",
+              borderColor: "divider",
+              borderRadius: 1,
+              p: 2,
+            }}>
+            {resumeText && resumeText.trim() !== "" ? (
+              <Typography
+                variant="body2"
+                component="div"
+                sx={{
+                  whiteSpace: "pre-wrap",
+                  fontFamily: "'Roboto', sans-serif",
+                  lineHeight: 1.6,
+                  fontSize: "0.875rem",
+                  textAlign: "left",
+                  wordBreak: "break-word",
+                  overflowWrap: "break-word",
+                }}>
+                {resumeText}
+              </Typography>
+            ) : (
+              <Box sx={{ textAlign: "center", py: 4 }}>
+                <Typography variant="h6" color="error" gutterBottom>
+                  No Resume Content Available
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Unable to load resume content for preview. Please try
+                  generating the resume again.
+                </Typography>
+                {/* Debug info in development */}
+                {typeof window !== "undefined" &&
+                  window.location.hostname === "localhost" && (
+                    <Box
+                      sx={{
+                        mt: 2,
+                        p: 1,
+                        bgcolor: "grey.100",
+                        borderRadius: 1,
+                      }}>
+                      <Typography
+                        variant="caption"
+                        sx={{ fontFamily: "monospace" }}>
+                        Debug: resumeText type: {typeof resumeText}, length:{" "}
+                        {resumeText?.length || 0}
+                      </Typography>
+                    </Box>
+                  )}
+              </Box>
+            )}
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <SecondaryButton size="small" onClick={() => setShowPreview(false)}>
+            Close
+          </SecondaryButton>
+        </DialogActions>
+      </Dialog>
+    </Box>
   );
 };
 

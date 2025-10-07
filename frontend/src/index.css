@@ -1,0 +1,144 @@
+:root {
+  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.4; /* Reduced from 1.5 for more compact layout */
+  font-weight: 400;
+
+  color-scheme: light dark;
+  color: rgba(255, 255, 255, 0.87);
+  background-color: #242424;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  /* Custom scrollbar colors for dark mode */
+  --scrollbar-thumb: rgba(147, 112, 219, 0.3);
+  --scrollbar-thumb-hover: rgba(147, 112, 219, 0.5);
+  --scrollbar-thumb-active: rgba(147, 112, 219, 0.7);
+  --scrollbar-track: rgba(255, 255, 255, 0.1);
+}
+
+/* Light mode scrollbar colors */
+[data-mui-color-scheme="light"] {
+  --scrollbar-thumb: rgba(147, 112, 219, 0.4);
+  --scrollbar-thumb-hover: rgba(147, 112, 219, 0.6);
+  --scrollbar-thumb-active: rgba(147, 112, 219, 0.8);
+  --scrollbar-track: rgba(0, 0, 0, 0.05);
+}
+
+/* Dark mode scrollbar colors */
+[data-mui-color-scheme="dark"] {
+  --scrollbar-thumb: rgba(147, 112, 219, 0.3);
+  --scrollbar-thumb-hover: rgba(147, 112, 219, 0.5);
+  --scrollbar-thumb-active: rgba(147, 112, 219, 0.7);
+  --scrollbar-track: rgba(255, 255, 255, 0.1);
+}
+
+a {
+  font-weight: 500;
+  color: #646cff;
+  text-decoration: inherit;
+}
+a:hover {
+  color: #535bf2;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  min-width: 300px; /* Reduced minimum for better scaling */
+  min-height: 400px; /* Use fixed minimum instead of 100vh for extensions */
+  max-height: 600px; /* Maximum height to prevent excessive extension popup size */
+  /* Allow scrolling */
+  overflow-x: auto;
+  overflow-y: auto;
+  /* Remove custom transform - let browser handle zoom natively */
+  /* Extension-specific: Responsive font size using relative units */
+  font-size: clamp(12px, 1.5vw, 16px); /* Responsive font scaling */
+}
+
+html {
+  height: 100%;
+  width: 100%;
+}
+
+/* Extension responsive handling */
+#root {
+  /* Remove custom transform scaling - use native browser zoom */
+  width: 100%;
+  height: fit-content; /* Fit content instead of 100% for better extension behavior */
+  min-height: 400px; /* Ensure minimum height */
+  max-height: 600px; /* Match body max-height */
+  /* Ensure content scales naturally with browser zoom */
+  box-sizing: border-box;
+  overflow-y: auto; /* Enable scrolling when content exceeds max-height */
+}
+
+/* Global scrollbar styling - more compact for extension */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar {
+  width: 6px; /* Reduced from 8px for extension */
+}
+
+*::-webkit-scrollbar-track {
+  background-color: var(--scrollbar-track);
+  border-radius: 3px; /* Reduced from 4px */
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border-radius: 3px; /* Reduced from 4px */
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
+}
+
+*::-webkit-scrollbar-thumb:active {
+  background-color: var(--scrollbar-thumb-active);
+}
+
+/* Extension-specific heading sizes */
+h1 {
+  font-size: 1.5rem; /* Reduced from 2.2em */
+  line-height: 1.2;
+  margin: 0.5rem 0; /* Reduced margins */
+}
+
+/* Extension-specific button styles */
+button {
+  border-radius: 6px; /* Reduced from 8px */
+  border: 1px solid transparent;
+  padding: 0.5em 1em; /* Reduced from 0.6em 1.2em */
+  font-size: 0.875rem; /* Reduced from 1em */
+  font-weight: 500;
+  font-family: inherit;
+  background-color: #1a1a1a;
+  cursor: pointer;
+  transition: border-color 0.25s;
+}
+button:hover {
+  border-color: #646cff;
+}
+button:focus,
+button:focus-visible {
+  outline: 2px auto -webkit-focus-ring-color; /* Reduced from 4px */
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color: #213547;
+    background-color: #ffffff;
+  }
+  a:hover {
+    color: #747bff;
+  }
+  button {
+    background-color: #f9f9f9;
+  }
+}
